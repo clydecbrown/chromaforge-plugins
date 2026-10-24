@@ -1,0 +1,63 @@
+# A tag `<plug-in>-v<version>` (e.g. pureraw-v0.1.0) releases that plug-in alone. `cargo xtask release`
+# checks that plugins/<plug-in> exists and that its Cargo.toml version and CHANGELOG.md section match
+# the tag, then builds only that plug-in for wasm32-unknown-unknown. The release is titled
+# "<display name> plug-in <version>" and carries <plug-in>-<version>.wasm, its .sha256 and the changelog
+# section. Then index.json on main gets that plug-in's entry. Other plug-ins aren't touched.
+name: Release
+
+on:
+  push:
+    tags: ["*-v[0-9]*"]
+
+# One release at a time, so two index.json updates can't race.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: The tagged commit is on main
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
+            { echo "::error::$TAG is not on main"; exit 1; }
+
+      - run: rustup toolchain install # what rust-toolchain.toml names, with wasm32
+
+      - id: build
+        run: cargo xtask release "$TAG" --out dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ steps.build.outputs.title }}
+          FILE: ${{ steps.build.outputs.file }}
+        run: |
+          gh release create "$TAG" --verify-tag --title "$TITLE" --notes-file dist/notes.md \
+            "dist/$FILE" "dist/$FILE.sha256"
+
+      - name: Update index.json on main
+        env:
+          FILE: ${{ steps.build.outputs.file }}
+        run: |
+          git checkout main
+          cargo xtask index dist/release.json --repo "$GITHUB_REPOSITORY"
+          git add index.json
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "index: $TAG"
+          git push origin main

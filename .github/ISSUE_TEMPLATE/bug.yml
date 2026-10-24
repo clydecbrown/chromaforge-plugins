@@ -1,0 +1,34 @@
+name: Bug
+description: A plug-in does something wrong
+labels: [bug]
+body:
+  # Keep the options in step with plugins/: one per plug-in, named like its folder (and its label).
+  - type: dropdown
+    id: plugin
+    attributes:
+      label: Which plug-in?
+      options:
+        - Shared code, CI or the repository
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: The plug-in's version (Plug-in Manager), Chromaforge's version (About) and your OS.
+      placeholder: "plug-in 0.1.0, Chromaforge 26.43.6, macOS 14.6"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Plug-in log
+      description: Plug-in Manager ▸ Log, if it says anything. Remove anything private first.
+      render: text

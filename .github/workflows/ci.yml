@@ -1,0 +1,65 @@
+# Pull requests and pushes to main: the workspace checks (fmt, clippy, native tests of every crate,
+# shared crates and stand-in round trips included), then each plug-in's wasm32 clippy and release build.
+# Every plug-in builds on every change: with a few plug-ins that's simpler than path filters, and a change
+# to a shared crate reaches every plug-in using it. `cargo xtask ci` runs the same locally.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install # what rust-toolchain.toml names, with wasm32
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask check
+
+  list:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      plugins: ${{ steps.list.outputs.plugins }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install # what rust-toolchain.toml names, with wasm32
+      - id: list
+        run: echo "plugins=$(cargo xtask plugins)" >> "$GITHUB_OUTPUT"
+
+  plugin:
+    needs: list
+    # A matrix over an empty list is an error, not an empty run.
+    if: needs.list.outputs.plugins != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJSON(needs.list.outputs.plugins) }}
+    name: plugin (${{ matrix.plugin }})
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install # what rust-toolchain.toml names, with wasm32
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask plugin "${{ matrix.plugin }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.plugin }}-wasm
+          path: target/wasm32-unknown-unknown/release/*.wasm
+          retention-days: 7

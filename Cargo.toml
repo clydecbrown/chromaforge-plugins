@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+# plugins/*: one crate per plug-in, each released on its own (README.md → Releases).
+# crates/*: shared code, never released alone. tools/*: test stand-ins for the programs plug-ins talk to.
+members = ["crates/*", "plugins/*", "tools/*", "xtask"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/clydecbrown/chromaforge-plugins"
+publish = false
+
+[workspace.dependencies]
+# Chromaforge's guest SDK (ABI v1, docs/plugins.md there). Pinned: bump the rev on purpose, after
+# reading what changed in sdk/plugin.
+lcc-plugin-sdk = { git = "https://github.com/emmertex/lightcraft-classic", rev = "8c0de9ceb5138023958fe56b6fab621285c808ea" }
+handoff = { path = "crates/handoff" }
+serde_json = "1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# The settings Chromaforge's SDK examples use: a small module, no unwinding in wasm.
+[profile.release]
+opt-level = "s"
+panic = "abort"
+lto = true
+strip = true

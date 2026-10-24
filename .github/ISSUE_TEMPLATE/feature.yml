@@ -1,0 +1,21 @@
+name: Feature request
+description: Something a plug-in should do, or a new plug-in
+labels: [enhancement]
+body:
+  # Keep the options in step with plugins/: one per plug-in, named like its folder (and its label).
+  - type: dropdown
+    id: plugin
+    attributes:
+      label: Which plug-in?
+      options:
+        - A new plug-in
+        - Shared code, CI or the repository
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What it should do
+      description: The problem it solves, and how you'd use it.
+    validations:
+      required: true

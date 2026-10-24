@@ -74,9 +74,14 @@ fn root() -> PathBuf {
 }
 
 fn cargo(root: &Path, args: &[&str]) -> Result<()> {
+    cargo_with(root, args, &[])
+}
+
+fn cargo_with(root: &Path, args: &[&str], envs: &[(&str, String)]) -> Result<()> {
     eprintln!("$ cargo {}", args.join(" "));
     let status = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
         .args(args)
+        .envs(envs.iter().map(|(k, v)| (k, v)))
         .current_dir(root)
         .status()
         .map_err(|e| format!("cargo: {e}"))?;
@@ -146,7 +151,7 @@ fn find_plugin(root: &Path, name: &str) -> Result<Plugin> {
 fn layout_problems(p: &Plugin) -> Vec<String> {
     let mut problems = Vec::new();
     if !valid_prefix(&p.dir) {
-        problems.push(format!("plugins/{}: folder names are lowercase letters, digits and '-'", p.dir));
+        problems.push(format!("plugins/{}: folder names are lowercase letters, digits and '-', not starting or ending with '-'", p.dir));
     }
     if p.cdylib.is_none() {
         problems.push(format!("plugins/{}: [lib] crate-type needs \"cdylib\"", p.dir));
@@ -171,15 +176,30 @@ fn plugin(root: &Path, p: &Plugin) -> Result<()> {
     build_wasm(root, p).map(|_| ())
 }
 
+/// Builds the release `.wasm`. Dependencies' panic locations hold their source paths, which sit under
+/// Cargo's home folder: mapped to `/cargo` (and the workspace to `/src`), so the file doesn't carry a
+/// user's home folder and the same commit builds to the same bytes on any machine with the same toolchain.
 fn build_wasm(root: &Path, p: &Plugin) -> Result<PathBuf> {
-    cargo(root, &["build", "-p", &p.package, "--lib", "--release", "--target", WASM_TARGET, "--locked"])?;
+    let cargo_home = env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|h| Path::new(&h).join(".cargo")))
+        .ok_or("neither CARGO_HOME nor HOME is set")?;
+    let flags = [format!("--remap-path-prefix={}=/cargo", cargo_home.display()), format!("--remap-path-prefix={}=/src", root.display())];
+    cargo_with(
+        root,
+        &["build", "-p", &p.package, "--lib", "--release", "--target", WASM_TARGET, "--locked"],
+        &[("CARGO_ENCODED_RUSTFLAGS", flags.join("\x1f"))],
+    )?;
     let target_dir = env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
     let wasm = target_dir.join(WASM_TARGET).join("release").join(format!("{}.wasm", p.cdylib.as_deref().unwrap_or(&p.package)));
     if wasm.is_file() { Ok(wasm) } else { Err(format!("{} was not built", wasm.display())) }
 }
 
+/// Lowercase letters, digits and `-`, starting and ending with a letter or digit.
 fn valid_prefix(s: &str) -> bool {
-    !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') && s.as_bytes()[0].is_ascii_alphanumeric()
+    s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && s.bytes().next().is_some_and(|b| b != b'-')
+        && s.bytes().last().is_some_and(|b| b != b'-')
 }
 
 /// `x.y.z` with an optional `-pre` / `+build`, as Cargo takes it.
@@ -299,7 +319,7 @@ mod tests {
 
     #[test]
     fn a_malformed_tag_is_refused() {
-        for tag in ["pureraw", "v0.1.0", "pureraw-v0.1", "PureRAW-v0.1.0", "pureraw-vx.y.z", "-v0.1.0", "pure_raw-v0.1.0"] {
+        for tag in ["pureraw", "v0.1.0", "pureraw-v0.1", "PureRAW-v0.1.0", "pureraw-vx.y.z", "-v0.1.0", "pure_raw-v0.1.0", "pureraw--v0.1.0"] {
             assert!(parse_tag(tag).is_err(), "{tag} should be refused");
         }
     }

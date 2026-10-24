@@ -2,7 +2,7 @@
 
 One folder per plug-in, each a crate released on its own (see the top-level README → Releases). The folder
 name is the plug-in's short name: its tag prefix (`<name>-v<version>`), its issue label and the name of its
-release file (`<name>-<version>.wasm`). Lowercase letters, digits and `-`.
+release file (`<name>-<version>.wasm`). Lowercase letters, digits and `-`, not starting or ending with `-`.
 
 ## Adding one
 
@@ -40,6 +40,15 @@ release file (`<name>-<version>.wasm`). Lowercase letters, digits and `-`.
       env!("CARGO_PKG_VERSION"),
       r#"", "permissions": {…}, …}"#
   );
+  ```
+
+  and, at the top of `src/lib.rs`, Chromaforge's no-panic rule (also at the root of every crate in
+  `crates/`). A panic in a plug-in is a wasm trap: Chromaforge survives it, but the user gets a vague
+  error and the hook stops halfway. Return an `Err` with a message instead; `clippy.toml` allows these
+  lints in tests.
+
+  ```rust
+  #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
   ```
 
 - `README.md`: what it does, a **Permissions** section (each permission it asks for and why: Chromaforge

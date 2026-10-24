@@ -1,4 +1,5 @@
-# A tag `<plug-in>-v<version>` (e.g. pureraw-v0.1.0) releases that plug-in alone. `cargo xtask release`
+# A tag `<plug-in>-v<version>` (e.g. pureraw-v0.1.0) releases that plug-in alone. The tagged commit must be
+# on main, and passes the same checks as CI before anything is built for release. `cargo xtask release`
 # checks that plugins/<plug-in> exists and that its Cargo.toml version and CHANGELOG.md section match
 # the tag, then builds only that plug-in for wasm32-unknown-unknown. The release is titled
 # "<display name> plug-in <version>" and carries <plug-in>-<version>.wasm, its .sha256 and the changelog
@@ -27,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -37,6 +38,13 @@ jobs:
             { echo "::error::$TAG is not on main"; exit 1; }
 
       - run: rustup toolchain install # what rust-toolchain.toml names, with wasm32
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      # What CI runs, again on the tagged commit: nothing is published that wasn't checked here.
+      - name: Check the workspace and the plug-in
+        run: |
+          cargo xtask check
+          cargo xtask plugin "${TAG%-v*}"
 
       - id: build
         run: cargo xtask release "$TAG" --out dist

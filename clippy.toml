@@ -1,0 +1,5 @@
+# Shipped crates deny unwrap/expect/panic at their roots (plugins/README.md); tests may use them.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

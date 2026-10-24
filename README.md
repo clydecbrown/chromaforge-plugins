@@ -54,6 +54,10 @@ A tag `<name>-v<version>` releases that plug-in alone:
 
 Before tagging, `cargo xtask release <tag>` builds the release into `dist/` locally, without publishing.
 
+Release builds are reproducible: the toolchain is pinned (`rust-toolchain.toml`, bumped on purpose) and
+`xtask` maps build paths to `/cargo` and `/src`. So a tag built anywhere with that toolchain matches the
+published `.sha256`.
+
 ### Finding the newest release
 
 GitHub's "latest release" is per repository, so it points at whichever plug-in shipped last. Each plug-in's

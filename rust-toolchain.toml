@@ -1,5 +1,8 @@
 # Pinned, so a tag rebuilds to the same .wasm and CI and releases use one compiler. Bump on purpose.
+# 1.94.0, not newer: 1.99.0's macOS rust-lld loads libLLVM.dylib from a folder the package doesn't put it
+# in, so wasm builds fail to link on macOS (1.94's links LLVM in). Check a newer one links wasm on macOS
+# before bumping.
 [toolchain]
-channel = "1.99.0"
+channel = "1.94.0"
 targets = ["wasm32-unknown-unknown"]
 components = ["rustfmt", "clippy"]

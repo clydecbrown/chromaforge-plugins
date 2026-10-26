@@ -13,6 +13,9 @@ versions and releases, and `plugins/README.md` explains how to add a plug-in.
   and its budgets are all defined there.
 - **Bumping the SDK `rev` is a review first.** Read `git diff <old>..<new> -- crates/plugins sdk/` in Chromaforge
   for changes to the ABI, the host calls and the permissions. Then bump, and run `cargo xtask ci`.
+- **Host features not merged yet:** build with `CHROMAFORGE_SDK=<Chromaforge checkout> cargo xtask …`, never
+  by editing the SDK dependency or adding a `[patch]` to a tracked file. `xtask` patches each build and puts
+  `Cargo.lock` back; plain `cargo` commands don't see the override.
 - **Quality gate before every commit: `cargo xtask ci`.** It runs fmt, clippy `-D warnings` and the native tests of
   every crate, then each plug-in's wasm32 clippy and release build. Commit only green states, one topic per
   commit, and never mix two plug-ins in one commit.
@@ -21,7 +24,7 @@ versions and releases, and `plugins/README.md` explains how to add a plug-in.
 
 - The product is **Chromaforge**. Don't use any other or earlier product name in code, docs, UI strings or tests.
   The one exception is the repository URL above.
-- Crates here have plain names (`handoff`, `pureraw`). Never `lcc-*`: those are Chromaforge's own crates.
+- Crates here have plain names (`handoff`, `ccb-dxo-pureraw`). Never `lcc-*`: those are Chromaforge's own crates.
 - A plug-in's folder name is its tag prefix, its issue label and the name of its release file.
 
 ## Never crash (outranks feature work)

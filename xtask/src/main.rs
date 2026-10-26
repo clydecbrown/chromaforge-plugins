@@ -9,6 +9,10 @@
 //!   that plug-in only, and writes `<name>-<version>.wasm`, its `.sha256`, `notes.md` (the changelog
 //!   section) and `release.json` to `<dir>` (default `dist`).
 //! - `index <release.json> --repo <owner/name> [--file <path>]`: puts that release into `index.json`.
+//!
+//! `CHROMAFORGE_SDK=<Chromaforge checkout>` builds against that checkout's `sdk/plugin` instead of the pinned
+//! `rev`, for host features not merged yet: each cargo call gets the patch as `--config` and runs without
+//! `--locked`, and `Cargo.lock` is put back afterwards, so nothing to commit changes. `release` refuses it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,6 +36,16 @@ fn main() {
 fn run(args: &[String]) -> Result<()> {
     let root = root();
     let rest = args.get(1..).unwrap_or_default();
+    let _lock = match sdk_override(&root)? {
+        Some(_) if args.first().map(String::as_str) == Some("release") => {
+            return Err("release builds use the pinned SDK: unset CHROMAFORGE_SDK".into());
+        }
+        Some(sdk) => {
+            eprintln!("xtask: building against {} (CHROMAFORGE_SDK); Cargo.lock is put back afterwards", sdk.path.display());
+            Some(LockGuard::new(&root)?)
+        }
+        None => None,
+    };
     match args.first().map(String::as_str) {
         Some("ci") => {
             check(&root)?;
@@ -78,14 +92,80 @@ fn cargo(root: &Path, args: &[&str]) -> Result<()> {
 }
 
 fn cargo_with(root: &Path, args: &[&str], envs: &[(&str, String)]) -> Result<()> {
+    let mut args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    // After the subcommand, not before: `cargo clippy` runs its own `cargo check`, which only sees the
+    // subcommand's arguments. `cargo fmt` would pass `--config` on to rustfmt, and needs no SDK.
+    if let Some(sdk) = sdk_override(root)?
+        && args.first().is_some_and(|sub| sub != "fmt")
+    {
+        args.retain(|a| a != "--locked");
+        args.splice(1..1, ["--config".to_string(), sdk.patch_config()]);
+    }
     eprintln!("$ cargo {}", args.join(" "));
     let status = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-        .args(args)
+        .args(&args)
         .envs(envs.iter().map(|(k, v)| (k, v)))
         .current_dir(root)
         .status()
         .map_err(|e| format!("cargo: {e}"))?;
     if status.success() { Ok(()) } else { Err(format!("cargo {} failed", args.join(" "))) }
+}
+
+/// A local Chromaforge checkout to build the SDK from (`CHROMAFORGE_SDK`).
+struct SdkOverride {
+    /// The `git` URL of `lcc-plugin-sdk` in the workspace `Cargo.toml`: the source the patch replaces.
+    git: String,
+    /// `<checkout>/sdk/plugin`, absolute.
+    path: PathBuf,
+}
+
+impl SdkOverride {
+    fn patch_config(&self) -> String {
+        // JSON string escapes are valid TOML basic-string escapes.
+        format!("patch.{}.lcc-plugin-sdk.path={}", json!(self.git), json!(self.path.to_string_lossy()))
+    }
+}
+
+fn sdk_override(root: &Path) -> Result<Option<SdkOverride>> {
+    let Some(checkout) = env::var_os("CHROMAFORGE_SDK").filter(|v| !v.is_empty()) else { return Ok(None) };
+    let path = Path::new(&checkout).join("sdk").join("plugin");
+    let path = fs::canonicalize(&path)
+        .map_err(|e| format!("CHROMAFORGE_SDK: {} is not a Chromaforge checkout with sdk/plugin ({e})", Path::new(&checkout).display()))?;
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).map_err(|e| format!("Cargo.toml: {e}"))?;
+    let git = sdk_git(&manifest).ok_or("Cargo.toml: no `lcc-plugin-sdk = { git = \"…\" … }` line to patch")?.to_string();
+    Ok(Some(SdkOverride { git, path }))
+}
+
+/// The `git` URL on the `lcc-plugin-sdk = { git = "…", … }` line of the workspace `Cargo.toml`.
+fn sdk_git(manifest: &str) -> Option<&str> {
+    let line = manifest.lines().find(|l| l.trim_start().starts_with("lcc-plugin-sdk"))?;
+    let (_, after) = line.split_once("git")?;
+    let after = after.trim_start().strip_prefix('=')?.trim_start().strip_prefix('"')?;
+    after.split_once('"').map(|(url, _)| url)
+}
+
+/// Puts `Cargo.lock` back as it was when dropped: a patched SDK rewrites its source line.
+struct LockGuard {
+    path: PathBuf,
+    saved: Vec<u8>,
+}
+
+impl LockGuard {
+    fn new(root: &Path) -> Result<Self> {
+        let path = root.join("Cargo.lock");
+        let saved = fs::read(&path).map_err(|e| format!("Cargo.lock: {e}"))?;
+        Ok(Self { path, saved })
+    }
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        if fs::read(&self.path).ok().as_deref() != Some(self.saved.as_slice())
+            && let Err(e) = fs::write(&self.path, &self.saved)
+        {
+            eprintln!("xtask: could not put Cargo.lock back ({e}): `git checkout Cargo.lock` before committing");
+        }
+    }
 }
 
 fn check(root: &Path) -> Result<()> {
@@ -357,6 +437,21 @@ mod tests {
         assert_eq!(index["plugins"]["pureraw"]["version"], "0.2.0");
         assert_eq!(index["plugins"]["pureraw"]["url"], "https://github.com/o/r/releases/download/pureraw-v0.2.0/pureraw-0.2.0.wasm");
         assert_eq!(index["plugins"]["other"]["version"], "1.0.0");
+    }
+
+    #[test]
+    fn the_sdk_git_url_comes_from_the_workspace_manifest() {
+        let manifest = "[workspace.dependencies]\n# lcc-plugin-sdk: a comment\n\
+            lcc-plugin-sdk = { git = \"https://example.org/app\", rev = \"abc\" }\nserde_json = \"1\"\n";
+        assert_eq!(sdk_git(manifest), Some("https://example.org/app"));
+        assert_eq!(sdk_git("lcc-plugin-sdk = { path = \"../sdk\" }"), None, "a path dependency has nothing to patch");
+        assert_eq!(sdk_git(&fs::read_to_string(root().join("Cargo.toml")).unwrap()), Some("https://github.com/emmertex/lightcraft-classic"));
+    }
+
+    #[test]
+    fn the_patch_config_quotes_url_and_path() {
+        let sdk = SdkOverride { git: "https://example.org/app".into(), path: PathBuf::from("/a b/\"q\"/sdk/plugin") };
+        assert_eq!(sdk.patch_config(), r#"patch."https://example.org/app".lcc-plugin-sdk.path="/a b/\"q\"/sdk/plugin""#);
     }
 
     #[test]

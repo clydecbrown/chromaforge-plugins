@@ -13,7 +13,7 @@ Several plug-ins share this repository, and each one is released on its own.
 |---|---|
 | `plugins/<name>/` | one plug-in per folder: its crate (the version in `Cargo.toml` is the plug-in's version), `README.md` with a **Permissions** section, `CHANGELOG.md`. How to add one: `plugins/README.md` |
 | `crates/` | shared code, never released alone (`handoff`: sending files to another program and taking the results back) |
-| `tools/` | test stand-ins for the programs plug-ins talk to, so the round trip runs in CI |
+| `tools/` | test stand-ins for the programs plug-ins talk to, so the round trip runs in CI. Every folder here is a crate (the workspace takes `tools/*`) |
 | `fixtures/` | shared test input |
 | `xtask/` | repository tasks: CI checks, release builds, `index.json` |
 | `index.json` | the current release of every plug-in, kept up to date by the release workflow |
@@ -31,6 +31,11 @@ cargo xtask plugin <name>                  # one plug-in: layout check, wasm32 c
 and the round trips included). The SDK is a git dependency pinned to a Chromaforge commit
 (`[workspace.dependencies]` in `Cargo.toml`). Bump it on purpose, after reading what changed in `sdk/plugin`.
 
+To build against host features that aren't merged yet, point `CHROMAFORGE_SDK` at a Chromaforge checkout:
+`CHROMAFORGE_SDK=../chromaforge cargo xtask ci`. Every `xtask` build then uses that checkout's `sdk/plugin`,
+and `Cargo.lock` is put back afterwards, so nothing to commit changes. `cargo xtask release` refuses it: releases
+use the pinned SDK.
+
 ## Versions
 
 Each plug-in has its own version, in its `Cargo.toml`. Its manifest reads it with `env!("CARGO_PKG_VERSION")`,
@@ -44,7 +49,7 @@ A tag `<name>-v<version>` releases that plug-in alone:
 
 1. On a branch, set the new `version` in `plugins/<name>/Cargo.toml` and add a `## [<version>] - <date>`
    section to its `CHANGELOG.md`. Merge to `main`.
-2. Tag the merge on `main` and push the tag: `git tag pureraw-v0.1.0 && git push origin pureraw-v0.1.0`.
+2. Tag the merge on `main` and push the tag: `git tag ccb-dxo-pureraw-v0.1.0 && git push origin ccb-dxo-pureraw-v0.1.0`.
 3. The release workflow (`.github/workflows/release.yml`) runs `cargo xtask release <tag>`. That checks the
    tag is on `main`, that `plugins/<name>` exists, and that its version and changelog section match the tag.
    Then it builds only that plug-in for `wasm32-unknown-unknown` and publishes a release titled

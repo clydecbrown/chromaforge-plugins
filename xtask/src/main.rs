@@ -445,7 +445,7 @@ mod tests {
             lcc-plugin-sdk = { git = \"https://example.org/app\", rev = \"abc\" }\nserde_json = \"1\"\n";
         assert_eq!(sdk_git(manifest), Some("https://example.org/app"));
         assert_eq!(sdk_git("lcc-plugin-sdk = { path = \"../sdk\" }"), None, "a path dependency has nothing to patch");
-        assert_eq!(sdk_git(&fs::read_to_string(root().join("Cargo.toml")).unwrap()), Some("https://github.com/emmertex/lightcraft-classic"));
+        assert_eq!(sdk_git(&fs::read_to_string(root().join("Cargo.toml")).unwrap()), Some("https://github.com/emmertex/chromaforge"));
     }
 
     #[test]

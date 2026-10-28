@@ -1,7 +1,7 @@
 # Instructions for agents
 
 This repository holds plug-ins for Chromaforge, the photo library and raw developer
-([emmertex/lightcraft-classic](https://github.com/emmertex/lightcraft-classic)). Each plug-in is a WebAssembly
+([emmertex/chromaforge](https://github.com/emmertex/chromaforge)). Each plug-in is a WebAssembly
 module that runs in Chromaforge's plug-in sandbox, inside the user's app, next to their photo library. The rules
 below come from Chromaforge's own `AGENTS.md`, cut down to what applies to plug-ins. `README.md` explains the layout,
 versions and releases, and `plugins/README.md` explains how to add a plug-in.
@@ -23,7 +23,6 @@ versions and releases, and `plugins/README.md` explains how to add a plug-in.
 ## Names
 
 - The product is **Chromaforge**. Don't use any other or earlier product name in code, docs, UI strings or tests.
-  The one exception is the repository URL above.
 - Crates here have plain names (`handoff`, `ccb-dxo-pureraw`). Never `lcc-*`: those are Chromaforge's own crates.
 - A plug-in's folder name is its tag prefix, its issue label and the name of its release file.
 

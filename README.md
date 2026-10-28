@@ -1,6 +1,6 @@
 # Chromaforge plug-ins
 
-Plug-ins for [Chromaforge](https://github.com/emmertex/lightcraft-classic), the photo library and raw
+Plug-ins for [Chromaforge](https://github.com/emmertex/chromaforge), the photo library and raw
 developer. Each one is a WebAssembly module built with Chromaforge's guest SDK (`sdk/plugin` there, ABI v1;
 see its `docs/plugins.md`). You install it from File ▸ Plug-ins ▸ Plug-in Manager… and choose which
 permissions to grant.

@@ -9,6 +9,7 @@ body:
       label: Which plug-in?
       options:
         - A new plug-in
+        - ccb-dxo-pureraw
         - Shared code, CI or the repository
     validations:
       required: true

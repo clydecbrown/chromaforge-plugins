@@ -19,7 +19,7 @@ use lcc_plugin_sdk::serde_json::Value;
 use lcc_plugin_sdk::{Request, export_plugin};
 
 pub use end::end;
-pub use send::{MAX_PHOTOS, send};
+pub use send::{MAX_PHOTOS, MAX_SELECTED, send};
 
 pub const MANIFEST: &str = concat!(
     r#"{"id": "io.github.clydecbrown.dxo-pureraw", "name": "ccb: Edit in DxO PureRAW", "version": ""#,
@@ -36,6 +36,8 @@ pub const MANIFEST: &str = concat!(
 }"#
 );
 
+/// The plug-in's name, as the manifest gives it (a test keeps the two the same).
+pub const PLUGIN_NAME: &str = "ccb: Edit in DxO PureRAW";
 /// The program's id in the manifest.
 pub const PROGRAM: &str = "pureraw";
 /// What the user knows it as.
@@ -101,7 +103,7 @@ mod tests {
     fn the_manifest_names_the_plugin_its_permissions_and_what_it_requires() {
         let m: Value = serde_json::from_str(MANIFEST).unwrap();
         assert_eq!(m["id"], "io.github.clydecbrown.dxo-pureraw");
-        assert_eq!(m["name"], "ccb: Edit in DxO PureRAW");
+        assert_eq!(m["name"], PLUGIN_NAME);
         assert_eq!(m["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(m["requires"], serde_json::json!(["programs", "libraryAdd"]));
         let perms = m["permissions"].as_object().unwrap();

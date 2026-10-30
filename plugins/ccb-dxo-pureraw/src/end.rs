@@ -111,7 +111,8 @@ pub fn end(host: &mut impl Host, req: &Request) -> Result<Value, String> {
         host.log(&format!("Skipped in {PROGRAM_NAME}'s results: {} more lines, past what one send can bring in.", results.more));
     }
     let photos = record.index();
-    // at most one add per photo sent and as many to spare: a list can't run the call out of budget
+    // every output of a photo sent is added, however many it has; in all, at most two per photo sent,
+    // so a broken or hostile list can't run the call out of host calls
     let max_adds = record.sent.len().saturating_mul(2);
     let mut processed: BTreeSet<&str> = BTreeSet::new();
     let mut adds = 0usize;

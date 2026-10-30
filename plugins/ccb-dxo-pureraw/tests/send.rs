@@ -2,7 +2,7 @@
 
 mod support;
 
-use ccb_dxo_pureraw::{MAX_PHOTOS, send};
+use ccb_dxo_pureraw::{MAX_PHOTOS, MAX_SELECTED, send};
 use support::FakeHost;
 
 fn ids(v: &[&str]) -> Vec<String> {
@@ -97,12 +97,33 @@ fn pureraw_missing_not_allowed_or_still_open_says_what_to_do_and_starts_nothing(
 }
 
 #[test]
-fn a_selection_over_the_limit_is_refused_before_anything_is_read() {
+fn a_selection_too_big_to_read_is_refused_before_anything_is_read() {
     let mut h = FakeHost::new("send-many");
-    let many: Vec<String> = (0..=MAX_PHOTOS).map(|i| i.to_string()).collect();
+    let many: Vec<String> = (0..=MAX_SELECTED).map(|i| i.to_string()).collect();
     let reply = send(&mut h, &many).unwrap();
-    assert!(message(&reply).contains(&format!("at most {MAX_PHOTOS}")), "{reply}");
+    let expected = format!("ccb: Edit in DxO PureRAW can process up to {MAX_PHOTOS} DNGs at a time. {} are selected.", MAX_SELECTED + 1);
+    assert_eq!(message(&reply), expected, "{reply}");
     assert_eq!(h.calls, 0);
+}
+
+#[test]
+fn more_raw_photos_than_one_send_takes_are_refused_with_the_limit_and_nothing_starts() {
+    let mut h = FakeHost::new("send-over");
+    let raws: Vec<String> = (0..=MAX_PHOTOS).map(|i| h.raw(&format!("r{i}.CR3"))).collect();
+    let reply = send(&mut h, &raws).unwrap();
+    let expected = format!("ccb: Edit in DxO PureRAW can process up to {MAX_PHOTOS} DNGs at a time. {} are selected.", MAX_PHOTOS + 1);
+    assert_eq!(message(&reply), expected, "{reply}");
+    assert!(h.started.is_empty(), "PureRAW isn't started");
+}
+
+#[test]
+fn photos_left_out_don_t_count_against_the_limit() {
+    let mut h = FakeHost::new("send-full");
+    let mut selection: Vec<String> = (0..MAX_PHOTOS).map(|i| h.raw(&format!("r{i}.CR3"))).collect();
+    selection.extend((0..20).map(|i| h.file(&format!("j{i}.jpg"), "image")));
+    let reply = send(&mut h, &selection).unwrap();
+    assert_eq!(reply["sent"], MAX_PHOTOS, "{reply}");
+    assert_eq!(h.started.len(), 1);
 }
 
 #[test]

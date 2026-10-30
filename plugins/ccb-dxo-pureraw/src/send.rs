@@ -4,11 +4,16 @@
 use handoff::{Batch, file_name};
 use lcc_plugin_sdk::serde_json::{Value, json};
 
-use crate::{BATCH, Host, LR_VERSION, NEWER_CHROMAFORGE, PROGRAM, PROGRAM_NAME, RUN_RECORD, unknown_method};
+use crate::{BATCH, Host, LR_VERSION, NEWER_CHROMAFORGE, PLUGIN_NAME, PROGRAM, PROGRAM_NAME, RUN_RECORD, unknown_method};
 
-/// The most photos one send takes: each costs a host call here and a `library.add` at the end, and
-/// both calls have budgets. More can go in another send.
-pub const MAX_PHOTOS: usize = 500;
+/// The most photos one send takes, a rule of thumb. Every DNG is added in the one `program.end` call,
+/// whose 120 s budget counts the time the app takes over each add: one live run on one loaded machine
+/// took 0.27 to 0.7 s per DNG (about 100 MB each), so 250 took about 90 s there. A slower machine, or
+/// PureRAW listing more outputs than photos, can still run out of time: the DNGs added so far stay.
+pub const MAX_PHOTOS: usize = 250;
+/// The most photos a send reads before choosing what to send: each is a host call or two, and a call
+/// has a budget. Above [`MAX_PHOTOS`] so that skipped photos don't count against the limit.
+pub const MAX_SELECTED: usize = 2000;
 const NOT_INSTALLED: &str =
     "DxO PureRAW 3 isn't installed on this computer. Install it, then send the photos again. (This plug-in works on macOS only for now.)";
 
@@ -25,8 +30,9 @@ pub fn send(host: &mut impl Host, selection: &[String]) -> Result<Value, String>
     if selection.is_empty() {
         return Ok(message(format!("Select the raw photos to send to {PROGRAM_NAME} first.")));
     }
-    if selection.len() > MAX_PHOTOS {
-        return Ok(message(format!("Send at most {MAX_PHOTOS} photos at a time ({} are selected).", selection.len())));
+    // too many to read through: refused as if all were raw
+    if selection.len() > MAX_SELECTED {
+        return Ok(message(too_many(selection.len())));
     }
     if let Some(why) = not_ready(host)? {
         return Ok(message(why));
@@ -76,6 +82,9 @@ pub fn send(host: &mut impl Host, selection: &[String]) -> Result<Value, String>
         }
     }
 
+    if batch.len() > MAX_PHOTOS {
+        return Ok(message(too_many(batch.len())));
+    }
     let left_out = named(&skipped);
     if batch.is_empty() {
         return Ok(message(format!("Nothing was sent to {PROGRAM_NAME}: {left_out}.")));
@@ -141,6 +150,12 @@ fn stack_target(host: &mut impl Host, photo: &str, inspected: &Value) -> String 
         .call("photo.inspect", json!({"id": master}))
         .is_ok_and(|m| m.get("deleted").and_then(Value::as_bool) != Some(true) && m.get("local").and_then(Value::as_bool) != Some(true));
     if in_library { master } else { photo.to_string() }
+}
+
+/// The refusal for a send of `count` raw photos (those left out don't count), over [`MAX_PHOTOS`], or of
+/// `count` photos over [`MAX_SELECTED`].
+fn too_many(count: usize) -> String {
+    format!("{PLUGIN_NAME} can process up to {MAX_PHOTOS} DNGs at a time. {count} are selected.")
 }
 
 /// What to tell the user when `program.start` refuses.

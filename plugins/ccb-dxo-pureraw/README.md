@@ -30,6 +30,9 @@ Good to know:
 - **Develop settings aren't copied** to the DNG: it's a new starting point.
 - **Virtual copies:** a virtual copy shares its master's file, so the file is sent once and its DNG is stacked on the
   master photo, whichever of them you selected. (If the master is in Recently Deleted, the DNG goes on the copy.)
+- **Up to 250 raw photos per send.** Photos that are left out (JPEGs, videos, Recently Deleted) don't count, up to 2000 selected. For
+  more, send them in parts, each once PureRAW has closed. Every DNG is added when PureRAW is done, and a plug-in's
+  call has a time limit, so a bigger send could stop partway.
 - **One send at a time.** While PureRAW is open from a send, the next one waits. ✕ on the run's row in the activity
   list stops waiting: PureRAW keeps running, but what it makes from that send isn't added.
 - PureRAW drops a new batch while it's already open from another app (Lightroom Classic's DxO plug-in, say). The

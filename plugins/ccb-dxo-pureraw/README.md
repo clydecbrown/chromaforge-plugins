@@ -1,4 +1,4 @@
-# CCB: Edit in DxO PureRAW
+# ccb: Edit in DxO PureRAW
 
 A [Chromaforge](https://github.com/emmertex/chromaforge) plug-in that sends raw photos to **DxO PureRAW 3** and brings
 back what it makes. Each DNG PureRAW makes is added to the library, stacked on the photo it came from, as the
@@ -13,7 +13,7 @@ It needs Chromaforge v26.44.2 or later (plug-in programs and `library.add`); an 
 ## Use
 
 1. Select raw photos in the Library.
-2. **File ▸ Plug-ins ▸ CCB: Edit in DxO PureRAW ▸ Send Selected Photos.** The plug-in leaves out what PureRAW can't
+2. **File ▸ Plug-ins ▸ ccb: Edit in DxO PureRAW ▸ Send Selected Photos.** The plug-in leaves out what PureRAW can't
    take and names each one: photos without a file (demo photos), photos that aren't raw files, photos in Recently
    Deleted, and files whose path holds a line break.
 3. PureRAW opens its *Process N photos* window. Choose the settings there and process the photos, or close it.

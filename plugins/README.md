@@ -4,6 +4,10 @@ One folder per plug-in, each a crate released on its own (see the top-level READ
 name is the plug-in's short name: its tag prefix (`<name>-v<version>`), its issue label and the name of its
 release file (`<name>-<version>.wasm`). Lowercase letters, digits and `-`, not starting or ending with `-`.
 
+The display name (the manifest's `name`, the menu, the Plug-in Manager, release titles) starts with a lowercase
+`ccb: `, then what the plug-in does: `ccb: Edit in DxO PureRAW`. It marks our plug-ins in the menu; keep it
+lowercase, never `CCB:`.
+
 ## Adding one
 
 `plugins/<name>/` needs:

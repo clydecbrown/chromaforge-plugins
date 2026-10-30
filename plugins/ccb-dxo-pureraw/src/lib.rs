@@ -1,4 +1,4 @@
-//! CCB: Edit in DxO PureRAW. Sends the selected raw photos to DxO PureRAW 3 the way its Lightroom
+//! ccb: Edit in DxO PureRAW. Sends the selected raw photos to DxO PureRAW 3 the way its Lightroom
 //! Classic plug-in does, and when PureRAW exits, adds each DNG it made to the library, stacked on the
 //! photo it came from.
 //!
@@ -22,7 +22,7 @@ pub use end::end;
 pub use send::{MAX_PHOTOS, send};
 
 pub const MANIFEST: &str = concat!(
-    r#"{"id": "io.github.clydecbrown.dxo-pureraw", "name": "CCB: Edit in DxO PureRAW", "version": ""#,
+    r#"{"id": "io.github.clydecbrown.dxo-pureraw", "name": "ccb: Edit in DxO PureRAW", "version": ""#,
     env!("CARGO_PKG_VERSION"),
     r#"", "description": "Sends raw photos to DxO PureRAW 3 and stacks the DNGs it makes on their originals.",
   "author": "Clyde C Brown",
@@ -101,7 +101,7 @@ mod tests {
     fn the_manifest_names_the_plugin_its_permissions_and_what_it_requires() {
         let m: Value = serde_json::from_str(MANIFEST).unwrap();
         assert_eq!(m["id"], "io.github.clydecbrown.dxo-pureraw");
-        assert_eq!(m["name"], "CCB: Edit in DxO PureRAW");
+        assert_eq!(m["name"], "ccb: Edit in DxO PureRAW");
         assert_eq!(m["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(m["requires"], serde_json::json!(["programs", "libraryAdd"]));
         let perms = m["permissions"].as_object().unwrap();

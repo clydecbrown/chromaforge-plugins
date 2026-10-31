@@ -293,7 +293,7 @@ fn valid_version(v: &str) -> bool {
 fn parse_tag(tag: &str) -> Result<(&str, &str)> {
     let (prefix, version) = tag.rsplit_once("-v").ok_or_else(|| format!("tag {tag:?} is not <plug-in>-v<version>"))?;
     if !valid_prefix(prefix) || !valid_version(version) {
-        return Err(format!("tag {tag:?} is not <plug-in>-v<version> (e.g. pureraw-v0.1.0)"));
+        return Err(format!("tag {tag:?} is not <plug-in>-v<version> (e.g. ccb-dxo-pureraw-v0.1.0)"));
     }
     Ok((prefix, version))
 }

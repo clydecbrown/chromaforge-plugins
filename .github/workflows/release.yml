@@ -1,4 +1,4 @@
-# A tag `<plug-in>-v<version>` (e.g. pureraw-v0.1.0) releases that plug-in alone. The tagged commit must be
+# A tag `<plug-in>-v<version>` (e.g. ccb-dxo-pureraw-v0.1.0) releases that plug-in alone. The tagged commit must be
 # on main, and passes the same checks as CI before anything is built for release. `cargo xtask release`
 # checks that plugins/<plug-in> exists and that its Cargo.toml version and CHANGELOG.md section match
 # the tag, then builds only that plug-in for wasm32-unknown-unknown. The release is titled

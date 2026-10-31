@@ -97,10 +97,12 @@ pub fn send(host: &mut impl Host, selection: &[String]) -> Result<Value, String>
     };
     let run = started.get("run").and_then(Value::as_str).unwrap_or_default();
     let count = batch.len();
-    let photos = if count == 1 { "1 photo".to_string() } else { format!("{count} photos") };
-    let mut text = format!(
-        "Sent {photos} to {PROGRAM_NAME}. Choose its settings in its window; the DNGs it makes are stacked on their originals when it's done."
-    );
+    let (photos, made) = if count == 1 {
+        ("1 photo".to_string(), "the DNG it makes is stacked on its original")
+    } else {
+        (format!("{count} photos"), "the DNGs it makes are stacked on their originals")
+    };
+    let mut text = format!("Sent {photos} to {PROGRAM_NAME}. Choose its settings in its window; {made} when it's done.");
     if !skipped.is_empty() {
         text.push_str(&format!(" Left out: {left_out}."));
     }

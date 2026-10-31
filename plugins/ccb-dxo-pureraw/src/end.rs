@@ -202,7 +202,12 @@ fn names(paths: &[String]) -> String {
 
 /// One line: what was added, then what wasn't (what to do about it is on lines of its own).
 fn summary(t: &Tally) -> String {
-    let mut parts = vec![format!("{PROGRAM_NAME}: added {}, stacked on their originals", count(t.added, "DNG", "DNGs"))];
+    let added = match t.added {
+        0 => "added no new DNGs".to_string(),
+        1 => "added 1 DNG, stacked on its original".to_string(),
+        n => format!("added {n} DNGs, stacked on their originals"),
+    };
+    let mut parts = vec![format!("{PROGRAM_NAME}: {added}")];
     if t.updated > 0 {
         parts.push(format!("{} made again and read again", count(t.updated, "DNG was", "DNGs were")));
     }
@@ -234,6 +239,14 @@ mod tests {
         fn log(&mut self, _: &str) {
             self.0 += 1;
         }
+    }
+
+    #[test]
+    fn the_summary_says_one_dng_and_none_in_words_that_fit() {
+        let tally = |added, updated| Tally { added, updated, ..Tally::default() };
+        assert_eq!(summary(&tally(1, 0)), "DxO PureRAW: added 1 DNG, stacked on its original.");
+        assert_eq!(summary(&tally(2, 0)), "DxO PureRAW: added 2 DNGs, stacked on their originals.");
+        assert_eq!(summary(&tally(0, 1)), "DxO PureRAW: added no new DNGs; 1 DNG was made again and read again.");
     }
 
     #[test]

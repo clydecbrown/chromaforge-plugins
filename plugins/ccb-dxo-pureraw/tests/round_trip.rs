@@ -147,5 +147,5 @@ fn sending_a_photo_again_keeps_one_stacked_version_read_again() {
     let reply = round_trip(&mut h, &[&a], Mode::Process);
     assert_eq!(h.stacked_on(&a).len(), 1, "one stacked version, not two");
     assert_eq!((reply["added"].as_u64(), reply["updated"].as_u64()), (Some(0), Some(1)), "{reply}");
-    assert!(summary(&h).contains("1 DNG was made again and read again"), "{}", summary(&h));
+    assert_eq!(summary(&h), "DxO PureRAW: added no new DNGs; 1 DNG was made again and read again.");
 }

@@ -97,6 +97,17 @@ fn pureraw_missing_not_allowed_or_still_open_says_what_to_do_and_starts_nothing(
 }
 
 #[test]
+fn one_photo_is_told_about_in_the_singular() {
+    let mut h = FakeHost::new("send-one");
+    let a = h.raw("a.CR3");
+    let reply = send(&mut h, &ids(&[&a])).unwrap();
+    assert_eq!(
+        message(&reply),
+        "Sent 1 photo to DxO PureRAW. Choose its settings in its window; the DNG it makes is stacked on its original when it's done."
+    );
+}
+
+#[test]
 fn a_selection_too_big_to_read_is_refused_before_anything_is_read() {
     let mut h = FakeHost::new("send-many");
     let many: Vec<String> = (0..=MAX_SELECTED).map(|i| i.to_string()).collect();

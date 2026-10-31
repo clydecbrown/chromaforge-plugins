@@ -1,0 +1,23 @@
+[package]
+name = "ccb-dxo-pureraw"
+description = "Chromaforge plug-in: edit raw photos in DxO PureRAW 3 and stack the DNGs it makes on their originals"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[package.metadata.chromaforge]
+display-name = "ccb: Edit in DxO PureRAW"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lcc-plugin-sdk.workspace = true
+handoff.workspace = true
+
+[dev-dependencies]
+fake-pureraw = { path = "../../tools/fake-pureraw" }
+
+[lints]
+workspace = true

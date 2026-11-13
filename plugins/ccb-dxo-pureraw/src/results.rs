@@ -1,4 +1,4 @@
-//! PureRAW's results list (`dxo-imported-files-PureRawv3`), as observed:
+//! PureRAW's results list (`dxo-imported-files-PureRawv<N>`; PureRAW 3's, as observed):
 //!
 //! ```text
 //! DxO PureRAW 3                                    the collection set's name

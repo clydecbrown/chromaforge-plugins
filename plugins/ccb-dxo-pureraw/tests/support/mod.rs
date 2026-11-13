@@ -9,6 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ccb_dxo_pureraw::Host;
+use ccb_dxo_pureraw::versions::{bundle_id, version_of};
 use lcc_plugin_sdk::Request;
 use lcc_plugin_sdk::serde_json::{Map, Value, json};
 
@@ -39,13 +40,16 @@ pub struct Started {
     pub args: Vec<String>,
     pub files: Map<String, Value>,
     pub tmp: PathBuf,
+    /// The version started (`bundleId`, or the first installed, as the host picks).
+    pub version: u32,
 }
 
 pub struct FakeHost {
     /// A scratch folder for this test: photos and run folders.
     pub root: PathBuf,
     pub photos: Vec<LibPhoto>,
-    pub installed: bool,
+    /// The versions installed, in any order (the host lists them in the manifest's).
+    pub installed: Vec<u32>,
     pub granted: bool,
     pub catalog: bool,
     /// `libraryAdd` granted.
@@ -54,7 +58,13 @@ pub struct FakeHost {
     pub busy: bool,
     /// A Chromaforge without programs and `library.add`.
     pub old: bool,
+    /// Answering a prepare step: the host refuses writes.
+    pub preparing: bool,
     pub started: Vec<Started>,
+    /// The `bundleId` of each `program.start` that started, as the plug-in gave it.
+    pub started_with: Vec<String>,
+    /// The app is removed after `program.list` answered, before `program.start`.
+    pub gone_at_start: bool,
     /// The folder lent to the current `program.end` call.
     pub lent: Option<PathBuf>,
     pub adds: Vec<Value>,
@@ -72,13 +82,16 @@ impl FakeHost {
         Self {
             root,
             photos: Vec::new(),
-            installed: true,
+            installed: vec![3],
             granted: true,
             catalog: true,
             library_add: true,
             busy: false,
             old: false,
+            preparing: false,
             started: Vec::new(),
+            started_with: Vec::new(),
+            gone_at_start: false,
             lent: None,
             adds: Vec::new(),
             log: Vec::new(),
@@ -175,9 +188,19 @@ impl FakeHost {
         if !self.granted {
             return Err("pureraw: permission `programs` not granted to this plug-in".into());
         }
-        if !self.installed {
-            return Err("DxO PureRAW is not installed".into());
-        }
+        let version = match p.get("bundleId") {
+            None => self.listed().first().copied(),
+            Some(Value::String(b)) => {
+                let v = version_of(b).ok_or(format!("bundleId {b:?} is not one of pureraw's"))?;
+                self.installed.contains(&v).then_some(v)
+            }
+            Some(_) => return Err("`bundleId` must be a string".into()),
+        };
+        let version = version.filter(|_| !self.gone_at_start);
+        let Some(version) = version else {
+            let wanted = p.get("bundleId").and_then(Value::as_str).map(|b| format!(" ({b})")).unwrap_or_default();
+            return Err(format!("DxO PureRAW is not installed{wanted}"));
+        };
         if self.busy {
             return Err("DxO PureRAW is already running for this plug-in; wait for it to end".into());
         }
@@ -195,8 +218,17 @@ impl FakeHost {
             .iter()
             .map(|a| a.as_str().expect("args are strings").replace("{tmpDir}", &tmp.display().to_string()))
             .collect();
-        self.started.push(Started { run: run.clone(), args, files, tmp: tmp.clone() });
+        self.started_with.push(p.get("bundleId").and_then(Value::as_str).unwrap_or_default().to_string());
+        self.started.push(Started { run: run.clone(), args, files, tmp: tmp.clone(), version });
         Ok(json!({"run": run, "tmpDir": tmp}))
+    }
+
+    /// The installed versions in the manifest's order: newest first.
+    fn listed(&self) -> Vec<u32> {
+        let mut v = self.installed.clone();
+        v.sort_by(|a, b| b.cmp(a));
+        v.dedup();
+        v
     }
 
     fn library_add(&mut self, p: &Value) -> Result<Value, String> {
@@ -246,10 +278,22 @@ impl Host for FakeHost {
         if self.old && matches!(method, "program.list" | "program.start" | "library.add") {
             return Err(format!("unknown host method {method:?}"));
         }
+        if self.preparing && matches!(method, "program.start" | "library.add" | "fs.writeText" | "ns.set" | "settings.set") {
+            return Err(format!("{method}: a prepare step can only read"));
+        }
         match method {
             "program.list" => {
-                let installed =
-                    if self.installed { json!([{"bundleId": "com.dxo-labs.PureRawv3.standalone", "version": "3.7.0"}]) } else { json!([]) };
+                let installed: Vec<Value> = self
+                    .listed()
+                    .into_iter()
+                    .map(|v| {
+                        let mut i = json!({"bundleId": bundle_id(v), "version": format!("{v}.7.0")});
+                        if self.granted {
+                            i["path"] = json!(format!("/Applications/DxO PureRAW {v}.app"));
+                        }
+                        i
+                    })
+                    .collect();
                 Ok(json!([{"program": "pureraw", "name": "DxO PureRAW", "granted": self.granted, "installed": installed}]))
             }
             "photo.inspect" => {

@@ -8,10 +8,15 @@ fn main() -> ExitCode {
     let tmp = std::env::var_os("TMPDIR").map_or_else(std::env::temp_dir, PathBuf::from);
     let mode = std::env::var("FAKE_PURERAW_MODE").unwrap_or_default();
     let Some(mode) = fake_pureraw::Mode::parse(&mode) else {
-        eprintln!("fake-pureraw: unknown FAKE_PURERAW_MODE {mode:?} (process, close, busy, repeat)");
+        eprintln!("fake-pureraw: unknown FAKE_PURERAW_MODE {mode:?} (process, close, busy, repeat, cancel)");
         return ExitCode::FAILURE;
     };
-    match fake_pureraw::run(&args, &tmp, mode) {
+    let version = std::env::var("FAKE_PURERAW_VERSION").unwrap_or_else(|_| "3".into());
+    let Ok(version) = version.parse::<u32>() else {
+        eprintln!("fake-pureraw: FAKE_PURERAW_VERSION {version:?} isn't a number");
+        return ExitCode::FAILURE;
+    };
+    match fake_pureraw::run_as(&args, &tmp, mode, version) {
         Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("fake-pureraw: {e}");

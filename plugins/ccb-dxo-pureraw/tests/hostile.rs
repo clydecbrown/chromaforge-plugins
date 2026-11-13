@@ -5,7 +5,8 @@ mod support;
 
 use std::fs;
 
-use ccb_dxo_pureraw::{RESULTS, RUN_RECORD, end, send};
+use ccb_dxo_pureraw::versions::{VERSION_FILE, results_file};
+use ccb_dxo_pureraw::{RUN_RECORD, end, send};
 use lcc_plugin_sdk::serde_json::Value;
 use support::{FakeHost, MAX_IO_BYTES};
 
@@ -17,13 +18,13 @@ fn ended_with(test: &str, results: Option<&str>, record: Option<&[u8]>) -> (Fake
     let mut h = FakeHost::new(test);
     let a = h.raw("a.dng");
     let b = h.raw("b.dng");
-    send(&mut h, &[a.clone(), b.clone()]).unwrap();
+    send(&mut h, &[a.clone(), b.clone()], &Value::Null).unwrap();
     let tmp = h.last_run().tmp.clone();
     let (pa, pb) = (h.path_of(&a), h.path_of(&b));
     fs::create_dir_all(h.root.join("DxO")).unwrap();
     fs::write(h.root.join("DxO/a.dng"), b"dng a").unwrap();
     if let Some(r) = results {
-        fs::write(tmp.join(RESULTS), r.replace("{a}", &pa).replace("{b}", &pb).replace("{dir}", &h.root.display().to_string())).unwrap();
+        fs::write(tmp.join(results_file(3)), r.replace("{a}", &pa).replace("{b}", &pb).replace("{dir}", &h.root.display().to_string())).unwrap();
     }
     if let Some(bytes) = record {
         fs::write(tmp.join(RUN_RECORD), bytes).unwrap();
@@ -80,8 +81,8 @@ fn a_list_over_the_host_s_size_limit_adds_nothing_and_says_why() {
 fn a_list_that_isn_t_text_adds_nothing() {
     let mut h = FakeHost::new("hostile-binary");
     let a = h.raw("a.dng");
-    send(&mut h, &[a]).unwrap();
-    fs::write(h.last_run().tmp.join(RESULTS), [0xff, 0xfe, 0x00]).unwrap();
+    send(&mut h, &[a], &Value::Null).unwrap();
+    fs::write(h.last_run().tmp.join(results_file(3)), [0xff, 0xfe, 0x00]).unwrap();
     let req = h.end_request("exited");
     end(&mut h, &req).unwrap();
     assert!(h.adds.is_empty());
@@ -105,7 +106,7 @@ fn a_missing_or_damaged_run_record_adds_nothing() {
     // gone altogether
     let mut h = FakeHost::new("hostile-record-gone");
     let a = h.raw("a.dng");
-    send(&mut h, &[a]).unwrap();
+    send(&mut h, &[a], &Value::Null).unwrap();
     fs::remove_file(h.last_run().tmp.join(RUN_RECORD)).unwrap();
     let req = h.end_request("exited");
     end(&mut h, &req).unwrap();
@@ -159,7 +160,7 @@ fn a_revoked_library_add_stops_with_what_to_allow() {
     let mut h = FakeHost::new("hostile-revoked");
     let a = h.raw("a.dng");
     let b = h.raw("b.dng");
-    send(&mut h, &[a, b]).unwrap();
+    send(&mut h, &[a, b], &Value::Null).unwrap();
     let run = h.last_run().clone();
     fake_pureraw::run(&run.args, &run.tmp, fake_pureraw::Mode::Process).unwrap();
     h.library_add = false;
@@ -175,7 +176,7 @@ fn a_revoked_library_add_stops_with_what_to_allow() {
 fn every_log_line_fits_the_host_s_limit() {
     let mut h = FakeHost::new("hostile-long-names");
     let ids: Vec<String> = (0..30).map(|i| h.raw(&format!("{i}-{}.dng", "n".repeat(200)))).collect();
-    send(&mut h, &ids).unwrap();
+    send(&mut h, &ids, &Value::Null).unwrap();
     let tmp = h.last_run().tmp.clone();
     // results that all point outside the originals' folders, and long names everywhere
     let mut list = HEADER.to_string();
@@ -189,7 +190,7 @@ fn every_log_line_fits_the_host_s_limit() {
         fs::write(&out, b"dng").unwrap();
         list.push_str(&format!("{i} {}\n", out.display()));
     }
-    fs::write(tmp.join(RESULTS), list).unwrap();
+    fs::write(tmp.join(results_file(3)), list).unwrap();
     let req = h.end_request("exited");
     end(&mut h, &req).unwrap();
     let _ = fs::remove_dir_all(h.root.parent().unwrap().join(format!("elsewhere-{}", std::process::id())));
@@ -211,4 +212,21 @@ fn an_end_without_a_folder_or_with_an_odd_status_adds_nothing() {
     }
     assert!(h.adds.is_empty());
     assert_eq!(h.log.len(), 4, "{:?}", h.log);
+}
+
+#[test]
+fn a_damaged_version_file_adds_nothing_and_says_why() {
+    for (name, text) in [("junk", "x".repeat(1000)), ("out-of-range", "10".into()), ("zero-padded", "03".into()), ("empty", String::new())] {
+        let mut h = FakeHost::new(&format!("hostile-version-{name}"));
+        let a = h.raw("a.dng");
+        send(&mut h, &[a], &Value::Null).unwrap();
+        let run = h.last_run().clone();
+        fake_pureraw::run(&run.args, &run.tmp, fake_pureraw::Mode::Process).unwrap();
+        fs::write(run.tmp.join(VERSION_FILE), &text).unwrap();
+        let req = h.end_request("exited");
+        let reply = end(&mut h, &req).expect("the hook returns");
+        assert_eq!(reply["added"], 0, "{name}");
+        assert!(h.logged("the run's version file is damaged"), "{name}: {:?}", h.log);
+        assert!(h.log.iter().all(|l| l.len() < 300), "{name}: a long file isn't copied into the log");
+    }
 }

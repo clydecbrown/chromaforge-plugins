@@ -1,21 +1,23 @@
 # ccb: Edit in DxO PureRAW
 
-A [Chromaforge](https://github.com/emmertex/chromaforge) plug-in that sends raw photos to **DxO PureRAW 3** and brings
+A [Chromaforge](https://github.com/emmertex/chromaforge) plug-in that sends raw photos to **DxO PureRAW** and brings
 back what it makes. Each DNG PureRAW makes is added to the library, stacked on the photo it came from, as the
 round trip from Lightroom Classic does.
 
 Not affiliated with, endorsed by or supported by DxO. DxO and DxO PureRAW are trademarks of DxO Labs. You need your
-own copy of DxO PureRAW 3.
+own copy of DxO PureRAW: version 3 or 2 (see [Versions](#versions)).
 
 Releases: [`ccb-dxo-pureraw` releases](https://github.com/clydecbrown/chromaforge-plugins/releases?q=ccb-dxo-pureraw-v&expanded=true).
-It needs Chromaforge v26.44.2 or later (plug-in programs and `library.add`); an older Chromaforge refuses to install it.
+It needs Chromaforge v26.44.2 or later (plug-in programs, settings and `library.add`); an older Chromaforge refuses to
+install it.
 
 ## Use
 
 1. Select raw photos in the Library.
 2. **File ▸ Plug-ins ▸ ccb: Edit in DxO PureRAW ▸ Send Selected Photos.** The plug-in leaves out what PureRAW can't
    take and names each one: photos without a file (demo photos), photos that aren't raw files, photos in Recently
-   Deleted, and files whose path holds a line break.
+   Deleted, and files whose path holds a line break. With more than one version of PureRAW installed, it asks which
+   one to use first.
 3. PureRAW opens its *Process N photos* window. Choose the settings there and process the photos, or close it.
 4. When PureRAW quits, each DNG it made is added to the library, stacked on its original. The plug-in's log
    (Plug-in Manager ▸ Log) has a summary: how many DNGs were added, and which photos weren't processed.
@@ -40,6 +42,31 @@ Good to know:
 - macOS only for now. The plug-in passes PureRAW a Lightroom version that doesn't exist, which keeps PureRAW from
   starting Lightroom Classic when it's done.
 
+## Versions
+
+Each major version of PureRAW installs as an app of its own (`DxO PureRAW 2.app`, `DxO PureRAW 3.app`, …), and you
+may have several. Send Selected Photos looks for the ones below that are installed: with one, it starts it; with
+more, it asks which; with none, it says which to install.
+
+| Version | |
+|---|---|
+| **DxO PureRAW 3** | tested |
+| **DxO PureRAW 2** | tested |
+| DxO PureRAW 4 to 9 | **experimental**: started with PureRAW 3's handoff, untested |
+
+- **Experimental** versions are started the way PureRAW 3 is, and their results read the way PureRAW 3's are. That
+  may not fit: a later version could write its list of results somewhere else, or differently. The messages and
+  the summary in its log say "experimental", and when something in the results isn't as expected (or nothing comes
+  back after you processed the photos) the log asks you to report it.
+- **A version becomes tested** once its handoff has been watched in three runs (processed, cancelled during
+  processing, and closed without processing) and the stand-in that CI runs the round trip against
+  (`tools/fake-pureraw`) does what that version does.
+- **To report how a version went**, open an issue at
+  [chromaforge-plugins](https://github.com/clydecbrown/chromaforge-plugins/issues) with the label `ccb-dxo-pureraw`:
+  the PureRAW version (PureRAW ▸ About), what you did, and the plug-in's log lines from that send (Plug-in
+  Manager ▸ Log). Don't attach PureRAW's own logs: they hold your licence details.
+- PureRAW 10 and later aren't declared, so Chromaforge can't let the plug-in start them; they need a plug-in update.
+
 ## Permissions
 
 Chromaforge shows each one unticked when you install the plug-in. It needs all three.
@@ -48,6 +75,6 @@ Chromaforge shows each one unticked when you install the plug-in. It needs all t
 |---|---|
 | **Read the catalog** (`catalog`) | To find each selected photo's file, and to tell raw files from others. It reads nothing else. |
 | **Add files made from photos to the library** (`libraryAdd`) | To add each DNG PureRAW makes, stacked on its original. Chromaforge allows only files in the original's folder or below it. |
-| **Start the program DxO PureRAW** (`programs`, bundle id `com.dxo-labs.PureRawv3.standalone`) | To open PureRAW with the photos you send. The plug-in passes it the list of files and the arguments its plug-in mode takes, nothing else. |
+| **Start the program DxO PureRAW** (`programs`, bundle ids `com.dxo-labs.PureRawv9.standalone` down to `com.dxo-labs.PureRawv2.standalone`) | To open the PureRAW you choose with the photos you send. The plug-in passes it the list of files and the arguments its plug-in mode takes, nothing else. Each bundle id is one version of PureRAW. |
 
 It asks for no network access and no other folders.

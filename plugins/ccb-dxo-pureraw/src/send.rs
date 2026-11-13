@@ -1,10 +1,13 @@
-//! Send Selected Photos: checks PureRAW is there and allowed, picks the photos it can take, writes the
-//! batch and the run record, and starts PureRAW. It returns at once; [`crate::end`] takes the results.
+//! Send Selected Photos. Its prepare step ([`prepare`]) finds the versions of PureRAW installed and
+//! answers with a message, the one to run, or a choice. The command ([`send`]) checks the chosen one is
+//! still there and allowed, picks the photos it can take, writes the batch, the run record and the
+//! version, and starts that PureRAW. It returns at once; [`crate::end`] takes the results.
 
 use handoff::{Batch, file_name};
 use lcc_plugin_sdk::serde_json::{Value, json};
 
-use crate::{BATCH, Host, LR_VERSION, NEWER_CHROMAFORGE, PLUGIN_NAME, PROGRAM, PROGRAM_NAME, RUN_RECORD, unknown_method};
+use crate::versions::{self, Installed, VERSION_FILE, bundle_id, from_label, is_tested, label, tested_names};
+use crate::{BATCH, Host, LR_VERSION, NEWER_CHROMAFORGE, PLUGIN_NAME, PROGRAM, PROGRAM_NAME, RUN_RECORD, VERSION_ARG, unknown_method};
 
 /// The most photos one send takes, a rule of thumb. Every DNG is added in the one `program.end` call,
 /// whose 120 s budget counts the time the app takes over each add: one live run on one loaded machine
@@ -14,8 +17,6 @@ pub const MAX_PHOTOS: usize = 250;
 /// The most photos a send reads before choosing what to send: each is a host call or two, and a call
 /// has a budget. Above [`MAX_PHOTOS`] so that skipped photos don't count against the limit.
 pub const MAX_SELECTED: usize = 2000;
-const NOT_INSTALLED: &str =
-    "DxO PureRAW 3 isn't installed on this computer. Install it, then send the photos again. (This plug-in works on macOS only for now.)";
 
 /// How many skipped photos a reply names before "and N more".
 const MAX_NAMED: usize = 10;
@@ -24,17 +25,45 @@ fn message(text: impl Into<String>) -> Value {
     json!({"message": text.into()})
 }
 
-/// The command: sends `selection` (photo ids) to PureRAW. Refusals are messages for the user, not
-/// errors; an error is something the host or the plug-in got wrong.
-pub fn send(host: &mut impl Host, selection: &[String]) -> Result<Value, String> {
+fn select_first() -> Value {
+    message(format!("Select the raw photos to send to {PROGRAM_NAME} first."))
+}
+
+/// The prepare step: how Send Selected Photos runs on `selection`. No version installed and allowed
+/// is a message; one runs at once; more are offered in the dialog, the first one chosen unless the
+/// dialog remembers another. It only reads, and gives the same answer for the same state: the host
+/// asks it twice.
+pub fn prepare(host: &mut impl Host, selection: &[String]) -> Result<Value, String> {
     if selection.is_empty() {
-        return Ok(message(format!("Select the raw photos to send to {PROGRAM_NAME} first.")));
+        return Ok(select_first());
+    }
+    let installed = match installed(host)? {
+        Ok(i) => i,
+        Err(why) => return Ok(message(why)),
+    };
+    let labels: Vec<String> = installed.versions.iter().map(|v| label(*v)).collect();
+    Ok(match labels.as_slice() {
+        [only] => json!({"run": {VERSION_ARG: only}}),
+        all => json!({"dialog": {VERSION_ARG: {"options": all, "default": all.first()}}}),
+    })
+}
+
+/// The command: sends `selection` (photo ids) to the PureRAW `choice` names (a [`label`]; none: the
+/// one the prepare step would choose). Refusals are messages for the user, not errors; an error is
+/// something the host or the plug-in got wrong.
+pub fn send(host: &mut impl Host, selection: &[String], choice: &Value) -> Result<Value, String> {
+    if selection.is_empty() {
+        return Ok(select_first());
     }
     // too many to read through: refused as if all were raw
     if selection.len() > MAX_SELECTED {
         return Ok(message(too_many(selection.len())));
     }
-    if let Some(why) = not_ready(host)? {
+    let version = match chosen(host, choice)? {
+        Ok(v) => v,
+        Err(why) => return Ok(message(why)),
+    };
+    if let Some(why) = cannot_add(host) {
         return Ok(message(why));
     }
 
@@ -90,10 +119,10 @@ pub fn send(host: &mut impl Host, selection: &[String]) -> Result<Value, String>
         return Ok(message(format!("Nothing was sent to {PROGRAM_NAME}: {left_out}.")));
     }
     let args = ["--as-lightroom-plugin", "--lr-version", LR_VERSION, "--batch-file", &format!("{{tmpDir}}/{BATCH}")];
-    let files = json!({BATCH: batch.text(), RUN_RECORD: batch.record().to_json()});
-    let started = match host.call("program.start", json!({"program": PROGRAM, "args": args, "files": files})) {
+    let files = json!({BATCH: batch.text(), RUN_RECORD: batch.record().to_json(), VERSION_FILE: version.to_string()});
+    let started = match host.call("program.start", json!({"program": PROGRAM, "args": args, "files": files, "bundleId": bundle_id(version)})) {
         Ok(v) => v,
-        Err(e) => return Ok(message(start_failed(&e))),
+        Err(e) => return Ok(message(start_failed(&e, version))),
     };
     let run = started.get("run").and_then(Value::as_str).unwrap_or_default();
     let count = batch.len();
@@ -102,44 +131,96 @@ pub fn send(host: &mut impl Host, selection: &[String]) -> Result<Value, String>
     } else {
         (format!("{count} photos"), "the DNGs it makes are stacked on their originals")
     };
-    let mut text = format!("Sent {photos} to {PROGRAM_NAME}. Choose its settings in its window; {made} when it's done.");
+    let name = versions::name(version);
+    let mut text = if is_tested(version) {
+        format!("Sent {photos} to {name}.")
+    } else {
+        format!("Sent {photos} to {name}, which this plug-in hasn't been tested with (experimental).")
+    };
+    text.push_str(&format!(" Choose its settings in its window; {made} when it's done."));
     if !skipped.is_empty() {
         text.push_str(&format!(" Left out: {left_out}."));
     }
-    host.log(&format!("{run}: sent {photos} to {PROGRAM_NAME}"));
-    Ok(json!({"message": text, "run": run, "sent": count, "skipped": skipped}))
+    host.log(&format!("{run}: sent {photos} to {}", label(version)));
+    Ok(json!({"message": text, "run": run, "sent": count, "skipped": skipped, "version": version, "experimental": !is_tested(version)}))
 }
 
-/// Why PureRAW can't be started now, before anything is read: not installed, or it or adding to the
-/// library not allowed.
-fn not_ready(host: &mut impl Host) -> Result<Option<String>, String> {
+fn not_installed() -> String {
+    format!(
+        "{PROGRAM_NAME} isn't installed on this computer, or not in a version this plug-in knows ({} to {}; a later one needs an update \
+         of the plug-in). It's tested with {}: install one, then send the photos again. (This plug-in works on macOS only for now.)",
+        versions::OLDEST,
+        versions::NEWEST,
+        tested_names()
+    )
+}
+
+fn not_granted() -> String {
+    format!("Allow {PROGRAM_NAME} for this plug-in first: File ▸ Plug-ins ▸ Plug-in Manager…, then tick {PROGRAM_NAME} on this plug-in's row.")
+}
+
+/// The versions installed and allowed, at least one; or why there's none, for the user. An `Err` is
+/// the host's.
+fn installed(host: &mut impl Host) -> Result<Result<Installed, String>, String> {
     let list = match host.call("program.list", json!({})) {
         Ok(v) => v,
-        Err(e) if unknown_method(&e) => return Ok(Some(NEWER_CHROMAFORGE.into())),
+        Err(e) if unknown_method(&e) => return Ok(Err(NEWER_CHROMAFORGE.into())),
         Err(e) => return Err(e),
     };
-    let entry = list.as_array().and_then(|l| l.iter().find(|p| p.get("program").and_then(Value::as_str) == Some(PROGRAM)));
-    let Some(entry) = entry else {
+    let Some(installed) = versions::installed(&list) else {
         return Err(format!("the host doesn't list the program {PROGRAM:?} this plug-in declares"));
     };
-    if entry.get("installed").and_then(Value::as_array).is_none_or(|i| i.is_empty()) {
-        return Ok(Some(NOT_INSTALLED.into()));
+    if installed.versions.is_empty() {
+        return Ok(Err(not_installed()));
     }
-    if entry.get("granted").and_then(Value::as_bool) != Some(true) {
-        return Ok(Some(format!(
-            "Allow {PROGRAM_NAME} for this plug-in first: File ▸ Plug-ins ▸ Plug-in Manager…, then tick {PROGRAM_NAME} on this plug-in's row."
-        )));
+    if !installed.granted {
+        return Ok(Err(not_granted()));
     }
+    Ok(Ok(installed))
+}
+
+/// The version `choice` names, if it's still installed and allowed; or why it can't run, for the user.
+/// No choice (a run without the dialog's value) is the prepare step's: the first one offered.
+fn chosen(host: &mut impl Host, choice: &Value) -> Result<Result<u32, String>, String> {
+    let installed = match installed(host)? {
+        Ok(i) => i,
+        Err(why) => return Ok(Err(why)),
+    };
+    let first = installed.versions.first().copied();
+    let version = match choice {
+        Value::Null => first,
+        // a run without the dialog's value gets the field's declared default: empty
+        Value::String(text) if text.is_empty() => first,
+        Value::String(text) => match from_label(text) {
+            Some(v) if installed.versions.contains(&v) => Some(v),
+            Some(v) => return Ok(Err(gone(v))),
+            None => None,
+        },
+        _ => None,
+    };
+    Ok(version.ok_or_else(|| format!("This plug-in doesn't know the version {choice}. Send the photos again and choose one from the list.")))
+}
+
+/// The refusal for a chosen `version` that isn't installed now.
+fn gone(version: u32) -> String {
+    format!(
+        "{} isn't installed any more, so nothing was sent. Send the photos again to choose from the versions installed now.",
+        versions::name(version)
+    )
+}
+
+/// Why the DNGs couldn't come back, before anything is read: adding to the library not allowed.
+fn cannot_add(host: &mut impl Host) -> Option<String> {
     // Without libraryAdd, PureRAW's DNGs couldn't come back: say so before the user spends time there.
     // The host checks the permission before the params, so a call without params asks only that and
     // adds nothing (Chromaforge's docs don't promise that order yet).
     match host.call("library.add", Value::Null) {
-        Err(e) if e.contains("permission `libraryAdd` not granted") => Ok(Some(format!(
+        Err(e) if e.contains("permission `libraryAdd` not granted") => Some(format!(
             "Allow \"Add files made from photos to the library\" for this plug-in first: File ▸ Plug-ins ▸ Plug-in Manager…. \
              It adds the DNGs {PROGRAM_NAME} makes, stacked on their originals."
-        ))),
-        Err(e) if unknown_method(&e) => Ok(Some(NEWER_CHROMAFORGE.into())),
-        _ => Ok(None),
+        )),
+        Err(e) if unknown_method(&e) => Some(NEWER_CHROMAFORGE.into()),
+        _ => None,
     }
 }
 
@@ -161,20 +242,20 @@ fn too_many(count: usize) -> String {
 }
 
 /// What to tell the user when `program.start` refuses.
-fn start_failed(e: &str) -> String {
+fn start_failed(e: &str, version: u32) -> String {
     if e.contains("already running") {
         format!(
             "{PROGRAM_NAME} is still open from the last send. Process or close the photos there first, then send these. \
              (✕ on its row in the activity list stops waiting for it.)"
         )
     } else if e.contains("permission `programs` not granted") {
-        format!("Allow {PROGRAM_NAME} for this plug-in first: File ▸ Plug-ins ▸ Plug-in Manager…, then tick {PROGRAM_NAME} on this plug-in's row.")
+        not_granted()
     } else if e.contains("is not installed") {
-        NOT_INSTALLED.into()
+        gone(version)
     } else if unknown_method(e) {
         NEWER_CHROMAFORGE.into()
     } else {
-        format!("{PROGRAM_NAME} could not be started: {e}")
+        format!("{} could not be started: {e}", versions::name(version))
     }
 }
 

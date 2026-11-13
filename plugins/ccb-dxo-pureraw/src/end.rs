@@ -1,6 +1,7 @@
-//! The `program.end` hook: PureRAW has exited (or the user stopped waiting). Reads its results list
-//! from the run's folder and adds each output to the library, stacked on the photo it came from, then
-//! logs one summary.
+//! The `program.end` hook: PureRAW has exited (or the user stopped waiting). Reads which version ran
+//! and its results list from the run's folder and adds each output to the library, stacked on the
+//! photo it came from, then logs one summary. After an experimental version, a result it didn't expect
+//! adds how to report it.
 
 use std::collections::BTreeSet;
 
@@ -9,7 +10,8 @@ use lcc_plugin_sdk::Request;
 use lcc_plugin_sdk::serde_json::{Value, json};
 
 use crate::results::parse;
-use crate::{BATCH, Host, MAX_PHOTOS, NEWER_CHROMAFORGE, PROGRAM_NAME, RESULTS, RUN_RECORD, unknown_method};
+use crate::versions::{self, VERSION_FILE, is_tested, label, results_file};
+use crate::{BATCH, Host, MAX_PHOTOS, NEWER_CHROMAFORGE, PROGRAM_NAME, RUN_RECORD, unknown_method};
 
 /// How many lines of detail (skipped results, failed adds) are logged before one "and N more": each
 /// line is a host call, and a call has a budget.
@@ -20,7 +22,10 @@ const MAX_NAMED: usize = 10;
 const MAX_LINE: usize = 2000;
 /// The most results one run reads: an add per photo sent, and as many to spare.
 const MAX_RESULTS: usize = MAX_PHOTOS * 2;
-
+/// The version a run without a version file ran: one sent by 0.1.0, which knew only PureRAW 3.
+const BEFORE_VERSIONS: u32 = 3;
+/// Where to report how an experimental version went.
+pub const REPORT_AT: &str = "https://github.com/clydecbrown/chromaforge-plugins/issues";
 /// What a run brought in, for the hook's reply and its summary.
 #[derive(Debug, Default)]
 struct Tally {
@@ -31,6 +36,9 @@ struct Tally {
     outside: Vec<String>,
     failed: Vec<String>,
     details: usize,
+    /// Something in the results this plug-in didn't expect: a line it couldn't read, an index or an
+    /// original that wasn't sent.
+    unexpected: bool,
 }
 
 impl Tally {
@@ -81,7 +89,16 @@ pub fn end(host: &mut impl Host, req: &Request) -> Result<Value, String> {
             return Ok(tally.reply());
         }
     };
-    let results_path = format!("{tmp}/{RESULTS}");
+    let version = match run_version(host, &tmp) {
+        Ok(v) => v,
+        Err(e) => {
+            host.log(fit(&format!("Nothing was added: {e}, so the results can't be found.")));
+            tally.not_processed = record.sent.iter().map(|s| s.path.clone()).collect();
+            return Ok(tally.reply());
+        }
+    };
+    let name = label(version);
+    let results_path = format!("{tmp}/{}", results_file(version));
     let text = match host.call("fs.readText", json!({"path": results_path})) {
         Ok(text) => text.as_str().unwrap_or_default().to_string(),
         Err(e) => {
@@ -94,8 +111,14 @@ pub fn end(host: &mut impl Host, req: &Request) -> Result<Value, String> {
                      another app or an earlier send (Lightroom Classic's DxO plug-in, or a send you stopped waiting for), and then it drops \
                      a new batch. Close that {PROGRAM_NAME} window, then send the photos again."
                 )
+            } else if is_tested(version) {
+                format!("{name} processed nothing (closed without processing, or it refused the photos), so nothing was added.")
             } else {
-                format!("{PROGRAM_NAME} processed nothing (closed without processing, or it refused the photos), so nothing was added.")
+                format!(
+                    "{name} processed nothing (closed without processing, or it refused the photos), so nothing was added. If it did process \
+                     them, it writes its results somewhere this plug-in doesn't know yet: {}",
+                    report(version)
+                )
             };
             host.log(fit(&line));
             tally.not_processed = record.sent.iter().map(|s| s.path.clone()).collect();
@@ -104,6 +127,8 @@ pub fn end(host: &mut impl Host, req: &Request) -> Result<Value, String> {
     };
 
     let results = parse(&text, MAX_RESULTS);
+    // a list with text but nothing the reader recognises is a format it doesn't know
+    tally.unexpected = !results.problems.is_empty() || results.more > 0 || (results.pairs.is_empty() && !text.trim().is_empty());
     for p in &results.problems {
         tally.detail(host, || format!("Skipped in {PROGRAM_NAME}'s results: {p}"));
     }
@@ -121,6 +146,7 @@ pub fn end(host: &mut impl Host, req: &Request) -> Result<Value, String> {
     host.log(&format!("Adding {}…", count(tries, "DNG", "DNGs")));
     for pair in &results.pairs {
         let Some(photo) = photos.get(pair.original).copied() else {
+            tally.unexpected = true;
             tally.detail(host, || format!("Skipped {}: it was made from {}, which this send didn't include.", pair.output, pair.original));
             continue;
         };
@@ -168,8 +194,28 @@ pub fn end(host: &mut impl Host, req: &Request) -> Result<Value, String> {
              back to the default (a \"DxO\" folder next to the originals) in its Preferences, then send those photos again."
         ));
     }
-    host.log(fit(&summary(&tally)));
+    host.log(fit(&summary(&tally, version)));
     Ok(tally.reply())
+}
+
+/// The version the run's folder says ran. A run sent before there were versions has no file.
+fn run_version(host: &mut impl Host, tmp: &str) -> Result<u32, String> {
+    let path = format!("{tmp}/{VERSION_FILE}");
+    let text = match host.call("fs.readText", json!({"path": path})) {
+        Ok(text) => text.as_str().unwrap_or_default().to_string(),
+        Err(_) if !exists(host, &path) => return Ok(BEFORE_VERSIONS),
+        Err(e) => return Err(format!("the run's version file couldn't be read ({e})")),
+    };
+    let n = text.trim();
+    versions::parse(n).ok_or_else(|| format!("the run's version file is damaged (it says {:?})", n.chars().take(20).collect::<String>()))
+}
+
+/// How to report what an experimental `version` did.
+fn report(version: u32) -> String {
+    format!(
+        "this plug-in hasn't been tested with {}. Please report what happened at {REPORT_AT} (label ccb-dxo-pureraw), with this log.",
+        versions::name(version)
+    )
 }
 
 /// Whether `path` (in the run's folder, lent to the call) exists; `false` when the host can't say.
@@ -200,14 +246,15 @@ fn names(paths: &[String]) -> String {
     format!("{}{more}", shown.join(", "))
 }
 
-/// One line: what was added, then what wasn't (what to do about it is on lines of its own).
-fn summary(t: &Tally) -> String {
+/// One line: what was added, then what wasn't (what to do about it is on lines of its own). After an
+/// experimental version, a result it didn't expect ends with how to report it.
+fn summary(t: &Tally, version: u32) -> String {
     let added = match t.added {
         0 => "added no new DNGs".to_string(),
         1 => "added 1 DNG, stacked on its original".to_string(),
         n => format!("added {n} DNGs, stacked on their originals"),
     };
-    let mut parts = vec![format!("{PROGRAM_NAME}: {added}")];
+    let mut parts = vec![format!("{}: {added}", label(version))];
     if t.updated > 0 {
         parts.push(format!("{} made again and read again", count(t.updated, "DNG was", "DNGs were")));
     }
@@ -223,7 +270,11 @@ fn summary(t: &Tally) -> String {
     if !t.failed.is_empty() {
         parts.push(format!("not added (see the lines above): {}", names(&t.failed)));
     }
-    format!("{}.", parts.join("; "))
+    let mut line = format!("{}.", parts.join("; "));
+    if !is_tested(version) && t.unexpected {
+        line.push_str(&format!(" Some results weren't as expected: {}", report(version)));
+    }
+    line
 }
 
 #[cfg(test)]
@@ -244,9 +295,19 @@ mod tests {
     #[test]
     fn the_summary_says_one_dng_and_none_in_words_that_fit() {
         let tally = |added, updated| Tally { added, updated, ..Tally::default() };
-        assert_eq!(summary(&tally(1, 0)), "DxO PureRAW: added 1 DNG, stacked on its original.");
-        assert_eq!(summary(&tally(2, 0)), "DxO PureRAW: added 2 DNGs, stacked on their originals.");
-        assert_eq!(summary(&tally(0, 1)), "DxO PureRAW: added no new DNGs; 1 DNG was made again and read again.");
+        assert_eq!(summary(&tally(1, 0), 3), "DxO PureRAW 3: added 1 DNG, stacked on its original.");
+        assert_eq!(summary(&tally(2, 0), 2), "DxO PureRAW 2: added 2 DNGs, stacked on their originals.");
+        assert_eq!(summary(&tally(0, 1), 3), "DxO PureRAW 3: added no new DNGs; 1 DNG was made again and read again.");
+    }
+
+    #[test]
+    fn only_an_experimental_version_s_unexpected_result_asks_for_a_report() {
+        let t = |unexpected| Tally { added: 1, unexpected, ..Tally::default() };
+        assert_eq!(summary(&t(false), 5), "DxO PureRAW 5 (experimental): added 1 DNG, stacked on its original.");
+        let s = summary(&t(true), 5);
+        assert!(s.starts_with("DxO PureRAW 5 (experimental): added 1 DNG, stacked on its original. Some results weren't as expected"), "{s}");
+        assert!(s.contains(REPORT_AT) && s.contains("tested with DxO PureRAW 5"), "{s}");
+        assert!(!summary(&t(true), 3).contains(REPORT_AT), "a tested version's problems are logged, not reported");
     }
 
     #[test]

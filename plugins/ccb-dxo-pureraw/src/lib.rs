@@ -1,9 +1,11 @@
-//! ccb: Edit in DxO PureRAW. Sends the selected raw photos to DxO PureRAW 3 the way its Lightroom
-//! Classic plug-in does, and when PureRAW exits, adds each DNG it made to the library, stacked on the
-//! photo it came from.
+//! ccb: Edit in DxO PureRAW. Sends the selected raw photos to DxO PureRAW the way its Lightroom Classic
+//! plug-in does, and when PureRAW exits, adds each DNG it made to the library, stacked on the photo it
+//! came from.
 //!
-//! - [`send`]: the menu command. Writes the batch (one absolute path per line) and `run.json` (which
-//!   photo each path came from) into the run's folder and starts PureRAW on it.
+//! - [`prepare`]: before the menu command runs, finds which versions of PureRAW are installed
+//!   ([`versions`]): none is a message, one runs at once, more are a choice.
+//! - [`send`]: the menu command. Writes the batch (one absolute path per line), `run.json` (which
+//!   photo each path came from) and the version into the run's folder and starts that PureRAW on it.
 //! - [`end`]: the `program.end` hook. Reads PureRAW's results list from the run's folder
 //!   ([`results`]) and adds each output with `library.add`.
 //!
@@ -14,25 +16,30 @@
 mod end;
 pub mod results;
 mod send;
+pub mod versions;
 
 use lcc_plugin_sdk::serde_json::Value;
 use lcc_plugin_sdk::{Request, export_plugin};
 
 pub use end::end;
-pub use send::{MAX_PHOTOS, MAX_SELECTED, send};
+pub use send::{MAX_PHOTOS, MAX_SELECTED, prepare, send};
 
 pub const MANIFEST: &str = concat!(
     r#"{"id": "io.github.clydecbrown.dxo-pureraw", "name": "ccb: Edit in DxO PureRAW", "version": ""#,
     env!("CARGO_PKG_VERSION"),
-    r#"", "description": "Sends raw photos to DxO PureRAW 3 and stacks the DNGs it makes on their originals.",
+    r#"", "description": "Sends raw photos to DxO PureRAW and stacks the DNGs it makes on their originals.",
   "author": "Clyde C Brown",
-  "requires": ["programs", "libraryAdd"],
+  "requires": ["programs", "libraryAdd", "settings"],
   "permissions": {
     "catalog": true,
     "libraryAdd": true,
-    "programs": [{"id": "pureraw", "name": "DxO PureRAW", "macBundleIds": ["com.dxo-labs.PureRawv3.standalone"]}]
+    "programs": [{"id": "pureraw", "name": "DxO PureRAW", "macBundleIds": [
+      "com.dxo-labs.PureRawv9.standalone", "com.dxo-labs.PureRawv8.standalone", "com.dxo-labs.PureRawv7.standalone",
+      "com.dxo-labs.PureRawv6.standalone", "com.dxo-labs.PureRawv5.standalone", "com.dxo-labs.PureRawv4.standalone",
+      "com.dxo-labs.PureRawv3.standalone", "com.dxo-labs.PureRawv2.standalone"]}]
   },
-  "commands": [{"id": "send", "label": "Send Selected Photos"}]
+  "commands": [{"id": "send", "label": "Send Selected Photos", "prepare": true,
+    "dialog": [{"key": "version", "label": "Version", "type": "choice", "options": []}]}]
 }"#
 );
 
@@ -46,8 +53,8 @@ pub const PROGRAM_NAME: &str = "DxO PureRAW";
 pub const BATCH: &str = "batch";
 /// What was sent, in the run's folder (`handoff::RunRecord`).
 pub const RUN_RECORD: &str = "run.json";
-/// PureRAW 3's results list, which it writes into its `$TMPDIR`: the run's folder.
-pub const RESULTS: &str = "dxo-imported-files-PureRawv3";
+/// The dialog field that holds the version to run ([`versions::label`]).
+pub const VERSION_ARG: &str = "version";
 /// The Lightroom version passed to PureRAW. No Lightroom has it: with an installed version, PureRAW
 /// sometimes starts Lightroom Classic when it's done, and that Lightroom stays suspended.
 pub const LR_VERSION: &str = "99.0";
@@ -83,7 +90,11 @@ const NEWER_CHROMAFORGE: &str = "This plug-in needs a newer Chromaforge, one wit
 fn handle(req: &Request) -> Result<Value, String> {
     match req.hook() {
         "command" => match req.command() {
-            "send" => send(&mut Sdk, &req.selection()),
+            "send" => send(&mut Sdk, &req.selection(), req.arg(VERSION_ARG)),
+            other => Err(format!("unknown command {other}")),
+        },
+        "command.prepare" => match req.command() {
+            "send" => prepare(&mut Sdk, &req.selection()),
             other => Err(format!("unknown command {other}")),
         },
         "program.end" => end(&mut Sdk, req),
@@ -105,16 +116,19 @@ mod tests {
         assert_eq!(m["id"], "io.github.clydecbrown.dxo-pureraw");
         assert_eq!(m["name"], PLUGIN_NAME);
         assert_eq!(m["version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(m["requires"], serde_json::json!(["programs", "libraryAdd"]));
+        assert_eq!(m["requires"], serde_json::json!(["programs", "libraryAdd", "settings"]));
         let perms = m["permissions"].as_object().unwrap();
         assert_eq!(perms.keys().collect::<Vec<_>>(), ["catalog", "libraryAdd", "programs"], "nothing else is asked for");
         assert_eq!(perms["catalog"], true);
         assert_eq!(perms["libraryAdd"], true);
+        let ids: Vec<String> = (versions::OLDEST..=versions::NEWEST).rev().map(versions::bundle_id).collect();
+        assert_eq!(ids.len(), 8, "the host takes at most 8 bundle ids per program");
+        assert_eq!(perms["programs"], serde_json::json!([{"id": PROGRAM, "name": PROGRAM_NAME, "macBundleIds": ids}]), "9 down to 2, newest first");
         assert_eq!(
-            perms["programs"],
-            serde_json::json!([{"id": PROGRAM, "name": PROGRAM_NAME, "macBundleIds": ["com.dxo-labs.PureRawv3.standalone"]}])
+            m["commands"],
+            serde_json::json!([{"id": "send", "label": "Send Selected Photos", "prepare": true,
+                "dialog": [{"key": VERSION_ARG, "label": "Version", "type": "choice", "options": []}]}])
         );
-        assert_eq!(m["commands"], serde_json::json!([{"id": "send", "label": "Send Selected Photos"}]));
     }
 
     #[test]

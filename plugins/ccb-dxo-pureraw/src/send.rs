@@ -1,12 +1,15 @@
-//! Send Selected Photos. Its prepare step ([`prepare`]) finds the versions of PureRAW installed and
-//! answers with a message, the one to run, or a choice. The command ([`send`]) checks the chosen one is
-//! still there and allowed, picks the photos it can take, writes the batch, the run record and the
-//! version, and starts that PureRAW. It returns at once; [`crate::end`] takes the results.
+//! Send Selected Photos. Its prepare step ([`prepare`]) finds the versions of PureRAW installed and,
+//! with the version setting, answers with a message, the one to run, or a choice. The command
+//! ([`send`]) checks the chosen one is still there and allowed, picks the photos it can take, writes
+//! the batch, the run record (with where the command ran from and the settings) and the version, and
+//! starts that PureRAW. It returns at once; [`crate::end`] takes the results. [`settings_prepare`]
+//! offers the installed versions on the settings page.
 
 use handoff::{Batch, file_name};
 use lcc_plugin_sdk::serde_json::{Value, json};
 
-use crate::versions::{self, Installed, VERSION_FILE, bundle_id, from_label, is_tested, label, tested_names};
+use crate::filing::{AUTOMATIC, Album, Filing, Settings, VERSION_SETTING};
+use crate::versions::{self, Installed, VERSION_FILE, bundle_id, from_label, from_setting, is_tested, label, tested_names};
 use crate::{BATCH, Host, LR_VERSION, NEWER_CHROMAFORGE, PLUGIN_NAME, PROGRAM, PROGRAM_NAME, RUN_RECORD, VERSION_ARG, unknown_method};
 
 /// The most photos one send takes, a rule of thumb. Every DNG is added in the one `program.end` call,
@@ -30,28 +33,86 @@ fn select_first() -> Value {
 }
 
 /// The prepare step: how Send Selected Photos runs on `selection`. No version installed and allowed
-/// is a message; one runs at once; more are offered in the dialog, the first one chosen unless the
-/// dialog remembers another. It only reads, and gives the same answer for the same state: the host
-/// asks it twice.
+/// is a message; the version setting, or the only version installed, runs at once; when Automatic
+/// leaves several (no tested one, more than one experimental) they're offered in the dialog. It only
+/// reads, and gives the same answer for the same state: the host asks it twice.
 pub fn prepare(host: &mut impl Host, selection: &[String]) -> Result<Value, String> {
     if selection.is_empty() {
         return Ok(select_first());
     }
-    let installed = match installed(host)? {
+    let settings = match Settings::read(host) {
+        Ok(s) => s,
+        Err(why) => return Ok(message(why)),
+    };
+    let installed = match installed(host, &settings)? {
         Ok(i) => i,
         Err(why) => return Ok(message(why)),
     };
-    let labels: Vec<String> = installed.versions.iter().map(|v| label(*v)).collect();
-    Ok(match labels.as_slice() {
-        [only] => json!({"run": {VERSION_ARG: only}}),
-        all => json!({"dialog": {VERSION_ARG: {"options": all, "default": all.first()}}}),
+    Ok(match decide(&installed, &settings) {
+        Decision::Run(v) => json!({"run": {VERSION_ARG: label(v)}}),
+        Decision::Ask(all) => {
+            let labels: Vec<String> = all.iter().map(|v| label(*v)).collect();
+            json!({"dialog": {VERSION_ARG: {"options": labels, "default": labels.first()}}})
+        }
+        Decision::Refuse(why) => message(why),
     })
 }
 
+/// The settings page's prepare step: the version setting offers Automatic and each version installed
+/// and allowed. Only Automatic when the host can't say.
+pub fn settings_prepare(host: &mut impl Host) -> Result<Value, String> {
+    let mut options = vec![AUTOMATIC.to_string()];
+    if let Some(i) = host.call("program.list", json!({})).ok().as_ref().and_then(versions::installed).filter(|i| i.granted) {
+        options.extend(i.versions.iter().map(|v| label(*v)));
+    }
+    Ok(json!({"fields": {VERSION_SETTING: {"options": options, "default": AUTOMATIC}}}))
+}
+
+/// Which version runs.
+#[derive(Debug, PartialEq, Eq)]
+enum Decision {
+    Run(u32),
+    /// Automatic leaves these, in the order offered.
+    Ask(Vec<u32>),
+    /// Why none can, for the user.
+    Refuse(String),
+}
+
+/// The version `settings` choose from `installed` (at least one, allowed): the one named, or with
+/// Automatic the newest tested one, the only one, or a choice.
+fn decide(installed: &Installed, settings: &Settings) -> Decision {
+    if !settings.is_automatic() {
+        return match from_setting(&settings.version) {
+            Some(v) if installed.versions.contains(&v) => Decision::Run(v),
+            Some(v) => Decision::Refuse(format!(
+                "{}, chosen in this plug-in's settings, isn't installed any more, so nothing was sent. {}",
+                versions::name(v),
+                choose_in_settings()
+            )),
+            None => Decision::Refuse(format!(
+                "This plug-in's settings choose a version of {PROGRAM_NAME} it doesn't know ({:?}), so nothing was sent. {}",
+                crate::filing::shown(&settings.version),
+                choose_in_settings()
+            )),
+        };
+    }
+    // tested versions come first, newest first
+    match installed.versions.as_slice() {
+        [first, ..] if is_tested(*first) => Decision::Run(*first),
+        [only] => Decision::Run(*only),
+        all => Decision::Ask(all.to_vec()),
+    }
+}
+
+fn choose_in_settings() -> &'static str {
+    "Choose another one, or Automatic, in its settings: File ▸ Plug-ins ▸ Plug-in Manager…, then Settings… on this plug-in's row."
+}
+
 /// The command: sends `selection` (photo ids) to the PureRAW `choice` names (a [`label`]; none: the
-/// one the prepare step would choose). Refusals are messages for the user, not errors; an error is
-/// something the host or the plug-in got wrong.
-pub fn send(host: &mut impl Host, selection: &[String], choice: &Value) -> Result<Value, String> {
+/// one the prepare step would choose), from `source` (the host's `source`: where it ran from).
+/// Refusals are messages for the user, not errors; an error is something the host or the plug-in got
+/// wrong.
+pub fn send(host: &mut impl Host, selection: &[String], choice: &Value, source: &Value) -> Result<Value, String> {
     if selection.is_empty() {
         return Ok(select_first());
     }
@@ -59,10 +120,15 @@ pub fn send(host: &mut impl Host, selection: &[String], choice: &Value) -> Resul
     if selection.len() > MAX_SELECTED {
         return Ok(message(too_many(selection.len())));
     }
-    let version = match chosen(host, choice)? {
+    let settings = match Settings::read(host) {
+        Ok(s) => s,
+        Err(why) => return Ok(message(why)),
+    };
+    let version = match chosen(host, choice, &settings)? {
         Ok(v) => v,
         Err(why) => return Ok(message(why)),
     };
+    let filing = Filing::new(&settings, source);
     if let Some(why) = cannot_add(host) {
         return Ok(message(why));
     }
@@ -105,7 +171,8 @@ pub fn send(host: &mut impl Host, selection: &[String], choice: &Value) -> Resul
             skipped.push(format!("{name} (it isn't a raw file)"));
             continue;
         }
-        let target = stack_target(host, photo, &inspected);
+        // a DNG for an album is added from the photo in it; otherwise a virtual copy's goes on its master
+        let target = if filing.album_id().is_some() { photo.to_string() } else { stack_target(host, photo, &inspected) };
         if let Err(why) = batch.add(&target, path) {
             skipped.push(format!("{} ({})", file_name(path), why.reason()));
         }
@@ -119,18 +186,18 @@ pub fn send(host: &mut impl Host, selection: &[String], choice: &Value) -> Resul
         return Ok(message(format!("Nothing was sent to {PROGRAM_NAME}: {left_out}.")));
     }
     let args = ["--as-lightroom-plugin", "--lr-version", LR_VERSION, "--batch-file", &format!("{{tmpDir}}/{BATCH}")];
-    let files = json!({BATCH: batch.text(), RUN_RECORD: batch.record().to_json(), VERSION_FILE: version.to_string()});
+    let mut record = batch.record();
+    record.source = source.clone();
+    record.settings = Some(settings.to_map());
+    let files = json!({BATCH: batch.text(), RUN_RECORD: record.to_json(), VERSION_FILE: version.to_string()});
     let started = match host.call("program.start", json!({"program": PROGRAM, "args": args, "files": files, "bundleId": bundle_id(version)})) {
         Ok(v) => v,
         Err(e) => return Ok(message(start_failed(&e, version))),
     };
     let run = started.get("run").and_then(Value::as_str).unwrap_or_default();
     let count = batch.len();
-    let (photos, made) = if count == 1 {
-        ("1 photo".to_string(), "the DNG it makes is stacked on its original")
-    } else {
-        (format!("{count} photos"), "the DNGs it makes are stacked on their originals")
-    };
+    let photos = if count == 1 { "1 photo".to_string() } else { format!("{count} photos") };
+    let made = where_they_go(&filing, count == 1);
     let name = versions::name(version);
     let mut text = if is_tested(version) {
         format!("Sent {photos} to {name}.")
@@ -138,6 +205,9 @@ pub fn send(host: &mut impl Host, selection: &[String], choice: &Value) -> Resul
         format!("Sent {photos} to {name}, which this plug-in hasn't been tested with (experimental).")
     };
     text.push_str(&format!(" Choose its settings in its window; {made} when it's done."));
+    if let Album::Not(why) = &filing.album {
+        text.push_str(&format!(" {} won't go into an album: {why}.", if count == 1 { "It" } else { "They" }));
+    }
     if !skipped.is_empty() {
         text.push_str(&format!(" Left out: {left_out}."));
     }
@@ -155,13 +225,29 @@ fn not_installed() -> String {
     )
 }
 
-fn not_granted() -> String {
-    format!("Allow {PROGRAM_NAME} for this plug-in first: File ▸ Plug-ins ▸ Plug-in Manager…, then tick {PROGRAM_NAME} on this plug-in's row.")
+/// "the DNGs it makes are …", as `filing` puts them.
+fn where_they_go(filing: &Filing, one: bool) -> String {
+    let (dngs, are, originals) = if one { ("the DNG it makes", "is", "its original") } else { ("the DNGs it makes", "are", "their originals") };
+    match (&filing.album, filing.stack) {
+        (Album::Into { name, .. }, true) => format!("{dngs} {are} added to the album \"{name}\", stacked on {originals},"),
+        (Album::Into { name, .. }, false) => format!("{dngs} {are} added to the album \"{name}\""),
+        (_, true) => format!("{dngs} {are} stacked on {originals}"),
+        (_, false) => format!("{dngs} {are} added to the library"),
+    }
+}
+
+/// The refusal while the program isn't allowed; it names the version the settings choose, if any.
+fn not_granted(settings: Option<&Settings>) -> String {
+    let wanted =
+        settings.filter(|s| !s.is_automatic()).map(|s| format!(" (the settings choose {})", crate::filing::shown(&s.version))).unwrap_or_default();
+    format!(
+        "Allow {PROGRAM_NAME} for this plug-in first{wanted}: File ▸ Plug-ins ▸ Plug-in Manager…, then tick {PROGRAM_NAME} on this plug-in's row."
+    )
 }
 
 /// The versions installed and allowed, at least one; or why there's none, for the user. An `Err` is
 /// the host's.
-fn installed(host: &mut impl Host) -> Result<Result<Installed, String>, String> {
+fn installed(host: &mut impl Host, settings: &Settings) -> Result<Result<Installed, String>, String> {
     let list = match host.call("program.list", json!({})) {
         Ok(v) => v,
         Err(e) if unknown_method(&e) => return Ok(Err(NEWER_CHROMAFORGE.into())),
@@ -174,23 +260,28 @@ fn installed(host: &mut impl Host) -> Result<Result<Installed, String>, String> 
         return Ok(Err(not_installed()));
     }
     if !installed.granted {
-        return Ok(Err(not_granted()));
+        return Ok(Err(not_granted(Some(settings))));
     }
     Ok(Ok(installed))
 }
 
 /// The version `choice` names, if it's still installed and allowed; or why it can't run, for the user.
-/// No choice (a run without the dialog's value) is the prepare step's: the first one offered.
-fn chosen(host: &mut impl Host, choice: &Value) -> Result<Result<u32, String>, String> {
-    let installed = match installed(host)? {
+/// No choice (a run without the dialog's value) is the prepare step's: the one `settings` choose, or
+/// the first one offered.
+fn chosen(host: &mut impl Host, choice: &Value, settings: &Settings) -> Result<Result<u32, String>, String> {
+    let installed = match installed(host, settings)? {
         Ok(i) => i,
         Err(why) => return Ok(Err(why)),
     };
-    let first = installed.versions.first().copied();
+    // a run without the dialog's value gets the field's declared default: empty
+    if choice.is_null() || choice.as_str() == Some("") {
+        return Ok(match decide(&installed, settings) {
+            Decision::Run(v) => Ok(v),
+            Decision::Ask(all) => all.first().copied().ok_or_else(not_installed),
+            Decision::Refuse(why) => Err(why),
+        });
+    }
     let version = match choice {
-        Value::Null => first,
-        // a run without the dialog's value gets the field's declared default: empty
-        Value::String(text) if text.is_empty() => first,
         Value::String(text) => match from_label(text) {
             Some(v) if installed.versions.contains(&v) => Some(v),
             Some(v) => return Ok(Err(gone(v))),
@@ -217,7 +308,7 @@ fn cannot_add(host: &mut impl Host) -> Option<String> {
     match host.call("library.add", Value::Null) {
         Err(e) if e.contains("permission `libraryAdd` not granted") => Some(format!(
             "Allow \"Add files made from photos to the library\" for this plug-in first: File ▸ Plug-ins ▸ Plug-in Manager…. \
-             It adds the DNGs {PROGRAM_NAME} makes, stacked on their originals."
+             It adds the DNGs {PROGRAM_NAME} makes to the library."
         )),
         Err(e) if unknown_method(&e) => Some(NEWER_CHROMAFORGE.into()),
         _ => None,
@@ -249,7 +340,7 @@ fn start_failed(e: &str, version: u32) -> String {
              (✕ on its row in the activity list stops waiting for it.)"
         )
     } else if e.contains("permission `programs` not granted") {
-        not_granted()
+        not_granted(None)
     } else if e.contains("is not installed") {
         gone(version)
     } else if unknown_method(e) {

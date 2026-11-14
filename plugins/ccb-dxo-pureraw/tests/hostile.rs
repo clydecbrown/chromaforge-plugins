@@ -6,9 +6,9 @@ mod support;
 use std::fs;
 
 use ccb_dxo_pureraw::versions::{VERSION_FILE, results_file};
-use ccb_dxo_pureraw::{RUN_RECORD, end, send};
+use ccb_dxo_pureraw::{RUN_RECORD, end};
 use lcc_plugin_sdk::serde_json::Value;
-use support::{FakeHost, MAX_IO_BYTES};
+use support::{FakeHost, MAX_IO_BYTES, send};
 
 const HEADER: &str = "DxO PureRAW 3\nEND_OF_COLLECTION_SET_SECTION\nxEND_OF_COLLECTION_NAME_SECTION\n+ selectCollection\n";
 

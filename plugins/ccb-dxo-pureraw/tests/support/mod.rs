@@ -1,7 +1,8 @@
 //! A stand-in for Chromaforge's side of the plug-in calls, close to what the host at the pinned SDK
 //! does: `program.list` and `program.start` (a real run folder, `{tmpDir}` expanded), the run's
-//! folder lent for reading, `library.add`'s folder rule and its re-read of a changed file, and the
-//! host's error texts the plug-in reacts to.
+//! folder lent for reading, `library.add`'s folder and album rules and its re-read of a changed file,
+//! the plug-in's settings, the Library source the session shows, and the host's error texts the
+//! plug-in reacts to.
 
 #![allow(dead_code)]
 
@@ -31,6 +32,16 @@ pub struct LibPhoto {
     pub stacked_on: Option<String>,
     /// The file's contents when the library last read it.
     pub read: Vec<u8>,
+}
+
+/// An album of the fake library.
+#[derive(Clone, Debug)]
+pub struct FakeAlbum {
+    pub id: String,
+    pub name: String,
+    pub photos: Vec<String>,
+    /// A smart album: it holds rules, not photos.
+    pub smart: bool,
 }
 
 /// A started run.
@@ -70,6 +81,19 @@ pub struct FakeHost {
     pub adds: Vec<Value>,
     pub log: Vec<String>,
     pub calls: usize,
+    pub albums: Vec<FakeAlbum>,
+    /// The settings as stored: the host fills in the defaults for keys never set.
+    pub settings: Map<String, Value>,
+    /// The Library source the session shows: the host sends it with each command.
+    pub source: Value,
+    /// `settings.get` fails.
+    pub settings_broken: bool,
+}
+
+/// Send Selected Photos as the host runs it: with the session's source.
+pub fn send(h: &mut FakeHost, selection: &[String], choice: &Value) -> Result<Value, String> {
+    let source = h.source.clone();
+    ccb_dxo_pureraw::send(h, selection, choice, &source)
 }
 
 impl FakeHost {
@@ -96,7 +120,40 @@ impl FakeHost {
             adds: Vec::new(),
             log: Vec::new(),
             calls: 0,
+            albums: Vec::new(),
+            settings: Map::new(),
+            source: Value::Null,
+            settings_broken: false,
         }
+        .browsing_its_folder()
+    }
+
+    fn browsing_its_folder(mut self) -> Self {
+        self.source = json!({"kind": "folder", "path": self.root});
+        self
+    }
+
+    /// Stores setting `key` as Settings… would.
+    pub fn set(&mut self, key: &str, value: Value) {
+        self.settings.insert(key.to_string(), value);
+    }
+
+    /// A regular album holding `photos`; its id.
+    pub fn album(&mut self, name: &str, photos: &[&str]) -> String {
+        let id = format!("{}", 100 + self.albums.len());
+        self.albums.push(FakeAlbum { id: id.clone(), name: name.into(), photos: photos.iter().map(|p| p.to_string()).collect(), smart: false });
+        id
+    }
+
+    /// The session shows album `id`, as the host's `source` says it.
+    pub fn show_album(&mut self, id: &str) {
+        let a = self.albums.iter().find(|a| a.id == id).unwrap();
+        let kind = if a.smart { "smartAlbum" } else { "album" };
+        self.source = json!({"kind": kind, "id": a.id, "name": a.name});
+    }
+
+    pub fn album_photos(&self, id: &str) -> Vec<String> {
+        self.albums.iter().find(|a| a.id == id).map(|a| a.photos.clone()).unwrap_or_default()
     }
 
     /// Writes a raw file at `rel` (below the scratch folder) and adds it to the library; its id.
@@ -235,6 +292,11 @@ impl FakeHost {
         let path = p.get("path").and_then(Value::as_str).ok_or("missing `path`")?.to_string();
         let from = p.get("from").and_then(Value::as_str).ok_or("missing `from`")?.to_string();
         let stack = p.get("stack").and_then(Value::as_bool).unwrap_or(false);
+        let album = match p.get("album") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(a)) => Some(a.clone()),
+            Some(a) => return Err(format!("`album`: {a} is not an id")),
+        };
         let origin = self.photos.iter().find(|x| x.id == from && !x.deleted && !x.local).ok_or(format!("photo {from} is not in the library"))?;
         let original = origin.path.clone().ok_or(format!("photo {from} has no file"))?;
         if !path.starts_with('/') {
@@ -248,16 +310,38 @@ impl FakeHost {
         if !target.starts_with(&folder) {
             return Err(format!("{path} is not in the folder of photo {from}'s original ({}) or below it", folder.display()));
         }
+        // `album`: a regular album that holds `from`, checked before anything changes
+        let album = match album {
+            None => None,
+            Some(a) => {
+                let al = self.albums.iter().position(|x| x.id == a).ok_or(format!("no album {a}"))?;
+                if self.albums[al].smart {
+                    return Err(format!("album {:?} can't hold photos (a smart album or a folder)", self.albums[al].name));
+                }
+                if !self.albums[al].photos.contains(&from) {
+                    return Err(format!("album {:?} doesn't hold photo {from}", self.albums[al].name));
+                }
+                Some(al)
+            }
+        };
         let bytes = fs::read(&target).map_err(|e| format!("{path} could not be added: {e}"))?;
+        let file_in = |albums: &mut Vec<FakeAlbum>, id: &str| {
+            if let Some(al) = album.filter(|al| !albums[*al].photos.iter().any(|x| x == id)) {
+                albums[al].photos.push(id.to_string());
+            }
+        };
         if let Some(existing) = self.photos.iter_mut().find(|x| x.path.as_deref() == Some(path.as_str())) {
             let reloaded = existing.read != bytes;
             existing.read = bytes;
             if stack {
                 existing.stacked_on = Some(from);
             }
-            return Ok(json!({"photo": existing.id, "added": false, "reloaded": reloaded}));
+            let id = existing.id.clone();
+            file_in(&mut self.albums, &id);
+            return Ok(json!({"photo": id, "added": false, "reloaded": reloaded}));
         }
         let id = (self.photos.len() + 1).to_string();
+        file_in(&mut self.albums, &id);
         self.photos.push(LibPhoto {
             id: id.clone(),
             path: Some(path),
@@ -312,6 +396,20 @@ impl Host for FakeHost {
                 String::from_utf8(bytes).map(Value::from).map_err(|_| format!("{}: not UTF-8 text", path.display()))
             }
             "fs.exists" => Ok(Value::from(self.lent_path(&params)?.exists())),
+            "settings.get" => {
+                if self.old {
+                    return Err("unknown host method \"settings.get\"".into());
+                }
+                if self.settings_broken {
+                    return Err("settings.get: the settings file couldn't be read".into());
+                }
+                // as the host does: every key, its default when never set
+                let mut v = json!({"addToAlbum": true, "stack": false, "version": ""});
+                for (k, value) in &self.settings {
+                    v[k] = value.clone();
+                }
+                Ok(v)
+            }
             "library.add" => {
                 // as the host does: the permission first, then the params
                 if !self.library_add {

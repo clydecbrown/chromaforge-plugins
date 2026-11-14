@@ -1,7 +1,8 @@
 //! The `program.end` hook: PureRAW has exited (or the user stopped waiting). Reads which version ran
-//! and its results list from the run's folder and adds each output to the library, stacked on the
-//! photo it came from, then logs one summary. After an experimental version, a result it didn't expect
-//! adds how to report it.
+//! and its results list from the run's folder and adds each output to the library, in the album and
+//! stack recorded when the photos were sent ([`Filing::of_record`]), then logs one summary. A DNG the
+//! album won't take (gone, or its original left it) is added without it. After an experimental
+//! version, a result it didn't expect adds how to report it.
 
 use std::collections::BTreeSet;
 
@@ -9,6 +10,7 @@ use handoff::{RunRecord, file_name};
 use lcc_plugin_sdk::Request;
 use lcc_plugin_sdk::serde_json::{Value, json};
 
+use crate::filing::{Album, Filing};
 use crate::results::parse;
 use crate::versions::{self, VERSION_FILE, is_tested, label, results_file};
 use crate::{BATCH, Host, MAX_PHOTOS, NEWER_CHROMAFORGE, PROGRAM_NAME, RUN_RECORD, unknown_method};
@@ -35,6 +37,10 @@ struct Tally {
     not_processed: Vec<String>,
     outside: Vec<String>,
     failed: Vec<String>,
+    /// Added without the album, which refused them.
+    album_refused: Vec<String>,
+    /// New DNGs that went into the album.
+    in_album: usize,
     details: usize,
     /// Something in the results this plug-in didn't expect: a line it couldn't read, an index or an
     /// original that wasn't sent.
@@ -135,6 +141,9 @@ pub fn end(host: &mut impl Host, req: &Request) -> Result<Value, String> {
     if results.more > 0 {
         host.log(&format!("Skipped in {PROGRAM_NAME}'s results: {} more lines, past what one send can bring in.", results.more));
     }
+    let filing = Filing::of_record(&record);
+    // set to None once the album is gone, so the rest aren't each tried twice
+    let mut album = filing.album_id();
     let photos = record.index();
     // every output of a photo sent is added, however many it has; in all, at most two per photo sent,
     // so a broken or hostile list can't run the call out of host calls
@@ -156,10 +165,39 @@ pub fn end(host: &mut impl Host, req: &Request) -> Result<Value, String> {
         }
         adds = adds.saturating_add(1);
         processed.insert(pair.original);
-        match host.call("library.add", json!({"path": pair.output, "from": photo, "stack": true})) {
+        let add = |album: Option<&str>| {
+            let mut p = json!({"path": pair.output, "from": photo, "stack": filing.stack});
+            if let Some(a) = album {
+                p["album"] = json!(a);
+            }
+            p
+        };
+        let mut result = host.call("library.add", add(album));
+        let mut filed = album.is_some();
+        if let (Some(id), Err(e)) = (album, &result) {
+            if album_refused(e, id) {
+                // gone: the rest aren't tried with it
+                if e.contains(&format!("no album {id}")) {
+                    album = None;
+                }
+                let e = e.clone();
+                result = host.call("library.add", add(None));
+                filed = false;
+                if result.is_ok() {
+                    tally.album_refused.push(pair.output.to_string());
+                    tally.detail(host, || format!("{} was added without the album: {e}", pair.output));
+                }
+            }
+        } else if filing.album_id().is_some() && album.is_none() && result.is_ok() {
+            tally.album_refused.push(pair.output.to_string());
+        }
+        match result {
             Ok(v) => {
                 if v.get("added").and_then(Value::as_bool) == Some(true) {
                     tally.added = tally.added.saturating_add(1);
+                    if filed {
+                        tally.in_album = tally.in_album.saturating_add(1);
+                    }
                 } else if v.get("reloaded").and_then(Value::as_bool) == Some(true) {
                     tally.updated = tally.updated.saturating_add(1);
                 } else {
@@ -194,8 +232,14 @@ pub fn end(host: &mut impl Host, req: &Request) -> Result<Value, String> {
              back to the default (a \"DxO\" folder next to the originals) in its Preferences, then send those photos again."
         ));
     }
-    host.log(fit(&summary(&tally, version)));
+    host.log(fit(&summary(&tally, version, &filing)));
     Ok(tally.reply())
+}
+
+/// Whether `e`, from `library.add` with album `id`, is the album refusing (the host's texts: gone, a
+/// smart album, or not holding the original any more): then the DNG is added without it.
+fn album_refused(e: &str, id: &str) -> bool {
+    e.contains(&format!("no album {id}")) || e.contains("doesn't hold photo") || e.contains("can't hold photos")
 }
 
 /// The version the run's folder says ran. A run sent before there were versions has no file.
@@ -246,15 +290,31 @@ fn names(paths: &[String]) -> String {
     format!("{}{more}", shown.join(", "))
 }
 
-/// One line: what was added, then what wasn't (what to do about it is on lines of its own). After an
-/// experimental version, a result it didn't expect ends with how to report it.
-fn summary(t: &Tally, version: u32) -> String {
-    let added = match t.added {
+/// One line: what was added and where, then what wasn't (what to do about it is on lines of its own).
+/// After an experimental version, a result it didn't expect ends with how to report it.
+fn summary(t: &Tally, version: u32, filing: &Filing) -> String {
+    let originals = if t.added == 1 { "its original" } else { "their originals" };
+    let mut added = match t.added {
         0 => "added no new DNGs".to_string(),
-        1 => "added 1 DNG, stacked on its original".to_string(),
-        n => format!("added {n} DNGs, stacked on their originals"),
+        n => count(n, "DNG", "DNGs"),
     };
+    if t.added > 0 {
+        let stacked = if filing.stack { format!(", stacked on {originals}") } else { String::new() };
+        added = match &filing.album {
+            Album::Into { name, .. } if t.in_album == t.added => format!("added {added} to the album \"{name}\"{stacked}"),
+            Album::Into { name, .. } if t.in_album > 0 => format!("added {added}{stacked}, {} of them to the album \"{name}\"", t.in_album),
+            _ => format!("added {added}{stacked}"),
+        };
+    }
     let mut parts = vec![format!("{}: {added}", label(version))];
+    let tried = t.added.saturating_add(t.updated).saturating_add(t.unchanged) > 0;
+    if let (Album::Not(why), true) = (&filing.album, tried) {
+        parts.push(format!("not put in an album: {why}"));
+    }
+    if let (Album::Into { name, .. }, false) = (&filing.album, t.album_refused.is_empty()) {
+        let theirs = if t.album_refused.len() == 1 { "its original" } else { "their originals" };
+        parts.push(format!("added without the album \"{name}\", which is gone or no longer holds {theirs}: {}", names(&t.album_refused)));
+    }
     if t.updated > 0 {
         parts.push(format!("{} made again and read again", count(t.updated, "DNG was", "DNGs were")));
     }
@@ -295,14 +355,38 @@ mod tests {
     #[test]
     fn the_summary_says_one_dng_and_none_in_words_that_fit() {
         let tally = |added, updated| Tally { added, updated, ..Tally::default() };
-        assert_eq!(summary(&tally(1, 0), 3), "DxO PureRAW 3: added 1 DNG, stacked on its original.");
-        assert_eq!(summary(&tally(2, 0), 2), "DxO PureRAW 2: added 2 DNGs, stacked on their originals.");
-        assert_eq!(summary(&tally(0, 1), 3), "DxO PureRAW 3: added no new DNGs; 1 DNG was made again and read again.");
+        let stacked = Filing { stack: true, album: Album::Off };
+        assert_eq!(summary(&tally(1, 0), 3, &stacked), "DxO PureRAW 3: added 1 DNG, stacked on its original.");
+        assert_eq!(summary(&tally(2, 0), 2, &stacked), "DxO PureRAW 2: added 2 DNGs, stacked on their originals.");
+        assert_eq!(summary(&tally(0, 1), 3, &stacked), "DxO PureRAW 3: added no new DNGs; 1 DNG was made again and read again.");
+    }
+
+    #[test]
+    fn the_summary_says_where_the_dngs_went() {
+        let t = Tally { added: 2, in_album: 2, ..Tally::default() };
+        let trip = Album::Into { id: "4".into(), name: "Trip".into() };
+        let s = |stack, album: &Album| summary(&t, 3, &Filing { stack, album: album.clone() });
+        assert_eq!(s(false, &trip), "DxO PureRAW 3: added 2 DNGs to the album \"Trip\".");
+        assert_eq!(s(true, &trip), "DxO PureRAW 3: added 2 DNGs to the album \"Trip\", stacked on their originals.");
+        assert_eq!(s(false, &Album::Off), "DxO PureRAW 3: added 2 DNGs.");
+        let folder = Album::Not("you sent the photos from a folder, not an album".into());
+        assert_eq!(s(false, &folder), "DxO PureRAW 3: added 2 DNGs; not put in an album: you sent the photos from a folder, not an album.");
+        let nothing = Tally::default();
+        assert!(!summary(&nothing, 3, &Filing { stack: false, album: folder }).contains("album"), "nothing to put anywhere");
+        let refused = Tally { added: 2, in_album: 1, album_refused: vec!["/p/DxO/a_DxO.dng".into()], ..Tally::default() };
+        assert_eq!(
+            summary(&refused, 3, &Filing { stack: false, album: trip.clone() }),
+            "DxO PureRAW 3: added 2 DNGs, 1 of them to the album \"Trip\"; added without the album \"Trip\", which is gone or no longer holds its original: a_DxO.dng."
+        );
+        let gone = Tally { added: 1, album_refused: vec!["/p/DxO/a_DxO.dng".into()], ..Tally::default() };
+        assert!(summary(&gone, 3, &Filing { stack: false, album: trip }).starts_with("DxO PureRAW 3: added 1 DNG; added without"), "none went in");
     }
 
     #[test]
     fn only_an_experimental_version_s_unexpected_result_asks_for_a_report() {
         let t = |unexpected| Tally { added: 1, unexpected, ..Tally::default() };
+        let stacked = Filing { stack: true, album: Album::Off };
+        let summary = |t: &Tally, v| summary(t, v, &stacked);
         assert_eq!(summary(&t(false), 5), "DxO PureRAW 5 (experimental): added 1 DNG, stacked on its original.");
         let s = summary(&t(true), 5);
         assert!(s.starts_with("DxO PureRAW 5 (experimental): added 1 DNG, stacked on its original. Some results weren't as expected"), "{s}");

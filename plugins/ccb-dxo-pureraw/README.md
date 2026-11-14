@@ -1,8 +1,8 @@
 # ccb: Edit in DxO PureRAW
 
 A [Chromaforge](https://github.com/emmertex/chromaforge) plug-in that sends raw photos to **DxO PureRAW** and brings
-back what it makes. Each DNG PureRAW makes is added to the library, stacked on the photo it came from, as the
-round trip from Lightroom Classic does.
+back what it makes. Each DNG PureRAW makes is added to the library, in the album you sent the photos from, next to
+its original (or stacked on it, if you prefer: see [Settings](#settings)).
 
 Not affiliated with, endorsed by or supported by DxO. DxO and DxO PureRAW are trademarks of DxO Labs. You need your
 own copy of DxO PureRAW: version 3 or 2 (see [Versions](#versions)).
@@ -16,22 +16,45 @@ install it.
 1. Select raw photos in the Library.
 2. **File ▸ Plug-ins ▸ ccb: Edit in DxO PureRAW ▸ Send Selected Photos.** The plug-in leaves out what PureRAW can't
    take and names each one: photos without a file (demo photos), photos that aren't raw files, photos in Recently
-   Deleted, and files whose path holds a line break. With more than one version of PureRAW installed, it asks which
-   one to use first.
+   Deleted, and files whose path holds a line break. It starts the version of PureRAW the settings choose.
 3. PureRAW opens its *Process N photos* window. Choose the settings there and process the photos, or close it.
-4. When PureRAW quits, each DNG it made is added to the library, stacked on its original. The plug-in's log
-   (Plug-in Manager ▸ Log) has a summary: how many DNGs were added, and which photos weren't processed.
+4. When PureRAW quits, each DNG it made is added to the library: in the album you sent the photos from, and stacked
+   on its original if you turned that on. The plug-in's log (Plug-in Manager ▸ Log) has a summary: how many DNGs
+   were added and where, and which photos weren't processed.
+
+## Settings
+
+File ▸ Plug-ins ▸ Plug-in Manager…, then **Settings…** on this plug-in's row:
+
+| Setting | Default | |
+|---|---|---|
+| **Add to the album I sent from** | on | Each DNG goes into the album you sent its photo from, next to it. |
+| **Stack on the original** | off | Each DNG is stacked on the photo it came from, also when it goes into an album. |
+| **PureRAW version** | Automatic | Which PureRAW to start (see [Versions](#versions)). The list shows the versions installed and allowed, experimental ones marked. |
+
+- **The album is the one you sent the photos from**: the album, or the Quick Collection, shown in the Library
+  when you chose Send Selected Photos. Other albums the photos are in don't count. Sent from a folder, All
+  Photographs, a smart album or another view (Picks, a search over All Photographs, …), the DNGs are added without
+  an album, as smart albums choose their photos by their rules; the message and the summary say so. With both
+  settings off, the DNGs are only added to the library, in their folder.
+- **A send keeps what you chose when you sent it.** You can move to another view or change the settings while
+  PureRAW is open: the DNGs from that send still go where they would have gone when you sent the photos. The next
+  send uses the new settings.
+- **If the album is deleted, or a photo is taken out of it, while PureRAW runs**, the DNGs are still added, without
+  the album, and the summary names the album and the DNGs it couldn't take.
+- Settings are kept for the whole app, not per library.
 
 Good to know:
 
 - **Where the DNGs go is PureRAW's choice**, set in its Preferences. Keep its default, a `DxO` folder next to each
   original: Chromaforge only adds files in the original's folder or below it, and names the ones it couldn't add.
-- **Sending a photo again** makes PureRAW write over its earlier DNG. The library keeps the one stacked version and
-  reads the new file again, as *Reload from Disk* does: new previews, size and camera fields the photo lacked.
-  Metadata already set on that version stays.
+- **Sending a photo again** makes PureRAW write over its earlier DNG. The library keeps that one DNG, in its album
+  and stack once each, and reads the new file again, as *Reload from Disk* does: new previews, size and camera
+  fields the photo lacked. Metadata already set on that version stays.
 - **Develop settings aren't copied** to the DNG: it's a new starting point.
-- **Virtual copies:** a virtual copy shares its master's file, so the file is sent once and its DNG is stacked on the
-  master photo, whichever of them you selected. (If the master is in Recently Deleted, the DNG goes on the copy.)
+- **Virtual copies:** a virtual copy shares its master's file, so the file is sent once. Sent from an album, its DNG
+  goes in next to the copy you selected (stacked on it, with stacking on). Otherwise it's stacked on the master
+  photo, whichever of them you selected. (If the master is in Recently Deleted, the DNG goes on the copy.)
 - **Up to 250 raw photos per send.** Photos that are left out (JPEGs, videos, Recently Deleted) don't count, up to 2000 selected. For
   more, send them in parts, each once PureRAW has closed. Every DNG is added when PureRAW is done, and a plug-in's
   call has a time limit, so a bigger send could stop partway.
@@ -45,8 +68,14 @@ Good to know:
 ## Versions
 
 Each major version of PureRAW installs as an app of its own (`DxO PureRAW 2.app`, `DxO PureRAW 3.app`, …), and you
-may have several. Send Selected Photos looks for the ones below that are installed: with one, it starts it; with
-more, it asks which; with none, it says which to install.
+may have several. Send Selected Photos looks for the ones below that are installed and starts the one the
+**PureRAW version** setting chooses:
+
+- **Automatic** (the default): the newest tested version installed. With no tested version, the only one installed,
+  or, with several experimental ones, it asks which.
+- **A version you chose**: that one, whatever else is installed. If it's no longer installed, Send Selected Photos
+  says so and starts nothing: choose another, or Automatic, in the settings.
+- With none installed, it says which to install.
 
 | Version | |
 |---|---|
@@ -74,7 +103,7 @@ Chromaforge shows each one unticked when you install the plug-in. It needs all t
 | Permission | What for |
 |---|---|
 | **Read the catalog** (`catalog`) | To find each selected photo's file, and to tell raw files from others. It reads nothing else. |
-| **Add files made from photos to the library** (`libraryAdd`) | To add each DNG PureRAW makes, stacked on its original. Chromaforge allows only files in the original's folder or below it. |
+| **Add files made from photos to the library** (`libraryAdd`) | To add each DNG PureRAW makes, in the album you sent from or stacked on its original, as the settings say. Chromaforge allows only files in the original's folder or below it, and only an album that holds the original. |
 | **Start the program DxO PureRAW** (`programs`, bundle ids `com.dxo-labs.PureRawv9.standalone` down to `com.dxo-labs.PureRawv2.standalone`) | To open the PureRAW you choose with the photos you send. The plug-in passes it the list of files and the arguments its plug-in mode takes, nothing else. Each bundle id is one version of PureRAW. |
 
 It asks for no network access and no other folders.

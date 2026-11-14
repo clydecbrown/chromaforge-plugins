@@ -7,11 +7,11 @@ mod support;
 
 use std::fs;
 
+use ccb_dxo_pureraw::end;
 use ccb_dxo_pureraw::versions::{VERSION_FILE, label, results_file};
-use ccb_dxo_pureraw::{end, send};
 use fake_pureraw::{Mode, output_of};
 use lcc_plugin_sdk::serde_json::{Value, json};
-use support::FakeHost;
+use support::{FakeHost, send};
 
 fn ids(v: &[&str]) -> Vec<String> {
     v.iter().map(|s| s.to_string()).collect()
@@ -35,13 +35,21 @@ fn round_trip_as(h: &mut FakeHost, photos: &[&str], mode: Mode, version: u32) ->
     end(h, &req).unwrap()
 }
 
+/// A host with the settings set to stack each DNG on its original and use no album.
+fn stacking(test: &str) -> FakeHost {
+    let mut h = FakeHost::new(test);
+    h.set("stack", json!(true));
+    h.set("addToAlbum", json!(false));
+    h
+}
+
 fn summary(h: &FakeHost) -> &str {
     h.log.last().unwrap()
 }
 
 #[test]
 fn each_dng_is_stacked_on_the_photo_its_index_points_at_not_on_the_batch_position() {
-    let mut h = FakeHost::new("rt-sorted");
+    let mut h = stacking("rt-sorted");
     // sent b, a: PureRAW lists them a, b
     let b = h.raw("b/IMG_2.CR3");
     let a = h.raw("a/IMG_1.CR3");
@@ -149,7 +157,7 @@ fn stopping_the_wait_adds_nothing_even_when_results_are_there() {
 
 #[test]
 fn sending_a_photo_again_keeps_one_stacked_version_read_again() {
-    let mut h = FakeHost::new("rt-again");
+    let mut h = stacking("rt-again");
     let a = h.raw("a.CR3");
     round_trip(&mut h, &[&a], Mode::Process);
     // the original changed, so PureRAW's new DNG differs from the first one
@@ -162,7 +170,7 @@ fn sending_a_photo_again_keeps_one_stacked_version_read_again() {
 
 #[test]
 fn pureraw_2_s_pairs_and_final_block_stack_each_dng_once_on_its_original() {
-    let mut h = FakeHost::new("rt-v2");
+    let mut h = stacking("rt-v2");
     h.installed = vec![2];
     let b = h.raw("b/IMG_1.CR3");
     let a = h.raw("a/IMG_2.CR3");
@@ -180,7 +188,7 @@ fn pureraw_2_s_pairs_and_final_block_stack_each_dng_once_on_its_original() {
 
 #[test]
 fn a_cancelled_pureraw_2_run_adds_the_finished_photo_and_names_the_rest() {
-    let mut h = FakeHost::new("rt-v2-cancel");
+    let mut h = stacking("rt-v2-cancel");
     let first = h.raw("a/1.CR3");
     let second = h.raw("b/2.CR3");
     let reply = round_trip_as(&mut h, &[&second, &first], Mode::Cancel, 2);
@@ -202,7 +210,7 @@ fn a_pureraw_2_run_closed_without_processing_adds_nothing_and_says_so() {
 
 #[test]
 fn an_experimental_version_s_run_reads_its_own_files_and_says_it_s_experimental() {
-    let mut h = FakeHost::new("rt-exp");
+    let mut h = stacking("rt-exp");
     let a = h.raw("a/1.CR3");
     let b = h.raw("b/2.CR3");
     let reply = round_trip_as(&mut h, &[&a, &b], Mode::Process, 6);

@@ -6,14 +6,15 @@
 //!
 //! - [`Batch`]: the files to send, one absolute path per line, each path once, with the photo it
 //!   came from. Paths a line-based list can't carry are refused, not mangled.
-//! - [`RunRecord`]: what was sent, kept in the run's folder (`run.json`) so the plug-in's
-//!   `program.end` call, a fresh instance, can tell which photo each result belongs to.
+//! - [`RunRecord`]: what was sent, from where and with which settings, kept in the run's folder
+//!   (`run.json`) so the plug-in's `program.end` call, a fresh instance, can tell which photo each
+//!   result belongs to and where to put it, whatever the user did in between.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 /// The format of [`RunRecord`]'s JSON. A record in any other format is refused.
 pub const RUN_RECORD_FORMAT: u64 = 1;
@@ -109,9 +110,9 @@ impl Batch {
         out
     }
 
-    /// The record to keep next to the batch.
+    /// The record to keep next to the batch: what was sent, without a source or settings.
     pub fn record(&self) -> RunRecord {
-        RunRecord { sent: self.sent.clone() }
+        RunRecord { sent: self.sent.clone(), ..RunRecord::default() }
     }
 }
 
@@ -119,17 +120,31 @@ impl Batch {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunRecord {
     pub sent: Vec<Sent>,
+    /// The Library source the command ran from (`source` in the host's request), as the host gave it:
+    /// read back from a file, so as untrusted as any input. `Null` when not recorded.
+    pub source: Value,
+    /// The plug-in's settings when the files were sent. `None` in a record written before plug-ins
+    /// kept them: the plug-in then does what it did then.
+    pub settings: Option<Map<String, Value>>,
 }
 
 impl RunRecord {
     pub fn to_json(&self) -> String {
         let sent: Vec<Value> = self.sent.iter().map(|s| json!({"photo": s.photo, "path": s.path})).collect();
-        json!({"format": RUN_RECORD_FORMAT, "sent": sent}).to_string()
+        let mut v = json!({"format": RUN_RECORD_FORMAT, "sent": sent});
+        if !self.source.is_null() {
+            v["source"] = self.source.clone();
+        }
+        if let Some(settings) = &self.settings {
+            v["settings"] = Value::Object(settings.clone());
+        }
+        v.to_string()
     }
 
     /// Reads a record written by [`RunRecord::to_json`] of at most `max` files. Anything else, or a
     /// record with a path listed twice, is an error: the plug-in can't then tell which photo a result
-    /// belongs to.
+    /// belongs to. `source` and `settings` may be missing (a record from before them); settings that
+    /// aren't an object are an error, as the plug-in can't then tell what the user chose.
     pub fn from_json(text: &str, max: usize) -> Result<Self, String> {
         let v: Value = serde_json::from_str(text).map_err(|e| format!("the run record is damaged ({e})"))?;
         if v.get("format").and_then(Value::as_u64) != Some(RUN_RECORD_FORMAT) {
@@ -152,7 +167,13 @@ impl RunRecord {
             }
             sent.push(Sent { photo: photo.to_string(), path: path.to_string() });
         }
-        Ok(Self { sent })
+        let source = v.get("source").cloned().unwrap_or(Value::Null);
+        let settings = match v.get("settings") {
+            None => None,
+            Some(Value::Object(m)) => Some(m.clone()),
+            Some(_) => return Err("the run record is damaged (its settings aren't a list of values)".into()),
+        };
+        Ok(Self { sent, source, settings })
     }
 
     /// The photo that sent `path`. Each call scans the record: for many lookups, use [`RunRecord::index`].
@@ -218,6 +239,23 @@ mod tests {
     }
 
     #[test]
+    fn the_source_and_settings_read_back_and_may_be_missing() {
+        let mut b = Batch::new();
+        b.add("7", "/p/a.CR3").unwrap();
+        let mut record = b.record();
+        let settings = json!({"addToAlbum": true, "stack": false});
+        record.source = json!({"kind": "album", "id": "4", "name": "Trip"});
+        record.settings = settings.as_object().cloned();
+        let back = RunRecord::from_json(&record.to_json(), 10).unwrap();
+        assert_eq!(back, record);
+        assert_eq!(back.settings.map(Value::Object), Some(settings));
+        let old = RunRecord::from_json(r#"{"format": 1, "sent": [{"photo": "7", "path": "/p/a.CR3"}]}"#, 10).unwrap();
+        assert_eq!((old.source, old.settings), (Value::Null, None), "a record from before them");
+        assert_eq!(old.sent, record.sent);
+        assert!(!b.record().to_json().contains("settings"), "none recorded, none written");
+    }
+
+    #[test]
     fn a_damaged_run_record_is_an_error_not_a_guess() {
         for text in [
             "",
@@ -229,6 +267,8 @@ mod tests {
             r#"{"format": 1, "sent": [{"photo": "1"}]}"#,
             r#"{"format": 1, "sent": [{"photo": 1, "path": "/a"}]}"#,
             r#"{"format": 1, "sent": [{"photo": "1", "path": "/a"}, {"photo": "2", "path": "/a"}]}"#,
+            r#"{"format": 1, "sent": [], "settings": [true]}"#,
+            r#"{"format": 1, "sent": [], "settings": null}"#,
         ] {
             assert!(RunRecord::from_json(text, 10).is_err(), "{text:?} should be refused");
         }

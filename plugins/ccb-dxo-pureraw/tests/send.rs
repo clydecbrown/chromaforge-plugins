@@ -2,9 +2,9 @@
 
 mod support;
 
-use ccb_dxo_pureraw::{MAX_PHOTOS, MAX_SELECTED, send};
-use lcc_plugin_sdk::serde_json::Value;
-use support::FakeHost;
+use ccb_dxo_pureraw::{MAX_PHOTOS, MAX_SELECTED};
+use lcc_plugin_sdk::serde_json::{Value, json};
+use support::{FakeHost, send};
 
 fn ids(v: &[&str]) -> Vec<String> {
     v.iter().map(|s| s.to_string()).collect()
@@ -83,13 +83,13 @@ fn pureraw_missing_not_allowed_or_still_open_says_what_to_do_and_starts_nothing(
             "not-installed",
             |h| h.installed.clear(),
             "It's tested with DxO PureRAW 3 or 2: install one, then send the photos again. (This plug-in works on macOS only",
-            1,
+            2,
         ),
-        ("not-granted", |h| h.granted = false, "tick DxO PureRAW on this plug-in's row", 1),
-        ("old-host", |h| h.old = true, "needs a newer Chromaforge", 1),
-        ("no-library-add", |h| h.library_add = false, "Allow \"Add files made from photos to the library\" for this plug-in first", 2),
-        ("no-catalog", |h| h.catalog = false, "Allow \"Read the catalog\"", 3),
-        ("busy", |h| h.busy = true, "still open from the last send", 4),
+        ("not-granted", |h| h.granted = false, "tick DxO PureRAW on this plug-in's row", 2),
+        ("old-host", |h| h.old = true, "needs a newer Chromaforge", 2),
+        ("no-library-add", |h| h.library_add = false, "Allow \"Add files made from photos to the library\" for this plug-in first", 3),
+        ("no-catalog", |h| h.catalog = false, "Allow \"Read the catalog\"", 4),
+        ("busy", |h| h.busy = true, "still open from the last send", 5),
     ];
     for (name, set, needle, calls) in cases {
         let mut h = FakeHost::new(&format!("send-{name}"));
@@ -106,6 +106,14 @@ fn pureraw_missing_not_allowed_or_still_open_says_what_to_do_and_starts_nothing(
 fn one_photo_is_told_about_in_the_singular() {
     let mut h = FakeHost::new("send-one");
     let a = h.raw("a.CR3");
+    let reply = send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
+    assert_eq!(
+        message(&reply),
+        "Sent 1 photo to DxO PureRAW 3. Choose its settings in its window; the DNG it makes is added to the library when it's done. \
+         It won't go into an album: you sent the photos from a folder, not an album."
+    );
+    h.set("stack", json!(true));
+    h.set("addToAlbum", json!(false));
     let reply = send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
     assert_eq!(
         message(&reply),

@@ -50,6 +50,13 @@ pub fn from_label(text: &str) -> Option<u32> {
     (OLDEST..=NEWEST).find(|v| label(*v) == text)
 }
 
+/// The version a setting names: its name, marked experimental or not, so a version saved while
+/// experimental is still found once it's tested.
+pub fn from_setting(text: &str) -> Option<u32> {
+    let unmarked = text.strip_suffix(" (experimental)").unwrap_or(text);
+    (OLDEST..=NEWEST).find(|v| name(*v) == unmarked)
+}
+
 /// The tested versions, for a message: "DxO PureRAW 3 or 2".
 pub fn tested_names() -> String {
     let rest: Vec<String> = TESTED.iter().skip(1).map(u32::to_string).collect();
@@ -128,6 +135,10 @@ mod tests {
         }
         assert_eq!(from_label("DxO PureRAW 5"), None, "an experimental version is chosen by its marked label");
         assert_eq!(from_label("DxO PureRAW 10"), None);
+        assert_eq!(from_setting("DxO PureRAW 5"), Some(5), "a setting may name it either way");
+        assert_eq!(from_setting("DxO PureRAW 3 (experimental)"), Some(3), "saved before it was tested");
+        assert_eq!(from_setting("DxO PureRAW 10"), None);
+        assert_eq!(from_setting("Automatic"), None);
         assert_eq!(tested_names(), "DxO PureRAW 3 or 2");
     }
 

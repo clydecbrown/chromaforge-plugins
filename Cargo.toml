@@ -12,8 +12,8 @@ publish = false
 
 [workspace.dependencies]
 # Chromaforge's guest SDK (ABI v1, docs/plugins.md there). Pinned: bump the rev on purpose, after
-# reading what changed in sdk/plugin.
-lcc-plugin-sdk = { git = "https://github.com/emmertex/chromaforge", rev = "da7eb874f34d622c55ca69604f875bbcfe1913fe" }
+# reading what changed in sdk/plugin. Now v26.47.0.
+lcc-plugin-sdk = { git = "https://github.com/emmertex/chromaforge", rev = "2be28b3c19e3b5873bfb076c904cb07b396bf8d8" }
 handoff = { path = "crates/handoff" }
 serde_json = "1"
 

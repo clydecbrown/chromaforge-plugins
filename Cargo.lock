@@ -85,7 +85,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 [[package]]
 name = "lcc-plugin-sdk"
 version = "0.1.0"
-source = "git+https://github.com/emmertex/chromaforge?rev=da7eb874f34d622c55ca69604f875bbcfe1913fe#da7eb874f34d622c55ca69604f875bbcfe1913fe"
+source = "git+https://github.com/emmertex/chromaforge?rev=2be28b3c19e3b5873bfb076c904cb07b396bf8d8#2be28b3c19e3b5873bfb076c904cb07b396bf8d8"
 dependencies = [
  "serde_json",
 ]

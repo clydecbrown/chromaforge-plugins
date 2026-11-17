@@ -61,5 +61,5 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.plugin }}-wasm
-          path: target/wasm32-unknown-unknown/release/*.wasm
+          path: target/wasm32-unknown-unknown/release/stamped/*.wasm
           retention-days: 7

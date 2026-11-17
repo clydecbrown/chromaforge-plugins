@@ -7,8 +7,12 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+plugin-stamp.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
+
+[dev-dependencies]
+wat = "1"
 
 [lints]
 workspace = true

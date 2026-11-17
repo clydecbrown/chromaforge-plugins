@@ -4,7 +4,7 @@
 //! - `ci`: everything a pull request runs (`check`, then `plugin` for every plug-in).
 //! - `check`: fmt, clippy and the native tests of the whole workspace.
 //! - `plugins`: the plug-in folder names as a JSON array (CI's matrix).
-//! - `plugin <name>`: one plug-in's layout, its wasm32 clippy and its release build.
+//! - `plugin <name>`: one plug-in's layout, its wasm32 clippy and its release build, stamped with its manifest.
 //! - `release <tag> [--out <dir>]`: checks a `<name>-v<version>` tag against `plugins/<name>`, builds
 //!   that plug-in only, and writes `<name>-<version>.wasm`, its `.sha256`, `notes.md` (the changelog
 //!   section) and `release.json` to `<dir>` (default `dist`).
@@ -256,8 +256,10 @@ fn plugin(root: &Path, p: &Plugin) -> Result<()> {
     build_wasm(root, p).map(|_| ())
 }
 
-/// Builds the release `.wasm`. Dependencies' panic locations hold their source paths, which sit under
-/// Cargo's home folder: mapped to `/cargo` (and the workspace to `/src`), so the file doesn't carry a
+/// Builds the release `.wasm`, stamps a copy of it with the manifest (`photo-plugin.manifest`, what
+/// `lcc_manifest` returns) and returns the copy's path: the file to check, checksum and publish.
+///
+/// Dependencies' panic locations hold their source paths, which sit under Cargo's home folder: mapped to `/cargo` (and the workspace to `/src`), so the file doesn't carry a
 /// user's home folder and the same commit builds to the same bytes on any machine with the same toolchain.
 fn build_wasm(root: &Path, p: &Plugin) -> Result<PathBuf> {
     let cargo_home = env::var_os("CARGO_HOME")
@@ -272,7 +274,30 @@ fn build_wasm(root: &Path, p: &Plugin) -> Result<PathBuf> {
     )?;
     let target_dir = env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
     let wasm = target_dir.join(WASM_TARGET).join("release").join(format!("{}.wasm", p.cdylib.as_deref().unwrap_or(&p.package)));
-    if wasm.is_file() { Ok(wasm) } else { Err(format!("{} was not built", wasm.display())) }
+    if !wasm.is_file() {
+        return Err(format!("{} was not built", wasm.display()));
+    }
+    stamp_copy(&wasm, &wasm.with_file_name("stamped").join(wasm.file_name().unwrap_or_default()), &p.dir)
+}
+
+/// Writes `stamped`: a copy of `built` with its manifest section. The build's own file stays as
+/// cargo made it, so a rebuild never sees a stamped input. Any earlier `stamped` is removed first and
+/// on failure none is left, so a stale or half-written file is never mistaken for this build's.
+fn stamp_copy(built: &Path, stamped: &Path, name: &str) -> Result<PathBuf> {
+    let fail = |e: &dyn std::fmt::Display| format!("plugins/{name}: stamping {} failed: {e}", built.display());
+    if stamped.exists() {
+        fs::remove_file(stamped).map_err(|e| fail(&format_args!("{}: {e}", stamped.display())))?;
+    }
+    let dir = stamped.parent().ok_or_else(|| fail(&"no folder to write to"))?;
+    fs::create_dir_all(dir).map_err(|e| fail(&format_args!("{}: {e}", dir.display())))?;
+    let limits = plugin_stamp::Limits::default();
+    plugin_stamp::stamp_file(built, Some(stamped), &limits).map_err(|e| fail(&e))?;
+    // read it back: exactly one section, equal to what lcc_manifest returns
+    plugin_stamp::check_file(stamped, &limits).map_err(|e| {
+        let _ = fs::remove_file(stamped);
+        fail(&e)
+    })?;
+    Ok(stamped.to_path_buf())
 }
 
 /// Lowercase letters, digits and `-`, starting and ending with a letter or digit.
@@ -449,9 +474,76 @@ mod tests {
     }
 
     #[test]
+    fn the_sdk_and_the_stamp_tool_are_pinned_to_one_rev() {
+        let manifest = fs::read_to_string(root().join("Cargo.toml")).unwrap();
+        let rev = |name: &str| {
+            let line = manifest.lines().find(|l| l.trim_start().starts_with(name)).unwrap_or_else(|| panic!("no {name} dependency"));
+            line.split_once("rev = \"")
+                .and_then(|(_, r)| r.split_once('"'))
+                .map(|(r, _)| r.to_string())
+                .unwrap_or_else(|| panic!("{name} has no rev"))
+        };
+        assert_eq!(
+            rev("lcc-plugin-sdk"),
+            rev("plugin-stamp"),
+            "bump both together, so a plug-in is stamped by the tool of the SDK it was built with"
+        );
+    }
+
+    #[test]
     fn the_patch_config_quotes_url_and_path() {
         let sdk = SdkOverride { git: "https://example.org/app".into(), path: PathBuf::from("/a b/\"q\"/sdk/plugin") };
         assert_eq!(sdk.patch_config(), r#"patch."https://example.org/app".lcc-plugin-sdk.path="/a b/\"q\"/sdk/plugin""#);
+    }
+
+    /// A minimal plug-in: the exports the stamp tool needs, and `manifest` as what `lcc_manifest` returns.
+    fn module(manifest: &str) -> Vec<u8> {
+        let wat = format!(
+            r#"(module
+              (memory (export "memory") 1)
+              (data (i32.const 16) {data})
+              (func (export "lcc_abi_version") (result i32) i32.const 1)
+              (func (export "lcc_manifest") (result i64) i64.const {packed})
+              (func (export "lcc_alloc") (param i32) (result i32) i32.const 1024)
+              (func (export "lcc_handle") (param i32 i32) (result i64) i64.const 0))"#,
+            data = json!(manifest),
+            packed = ((manifest.len() as u64) << 32) | 16,
+        );
+        wat::parse_str(wat).unwrap()
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!("xtask-stamp-{}-{name}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_stamped_copy_has_the_manifest_and_the_build_is_left_alone() {
+        let dir = scratch("copy");
+        let manifest = r#"{"id":"x","version":"1.0.0"}"#;
+        let built = dir.join("x.wasm");
+        fs::write(&built, module(manifest)).unwrap();
+        let stamped = stamp_copy(&built, &dir.join("stamped").join("x.wasm"), "x").unwrap();
+        let bytes = fs::read(&stamped).unwrap();
+        assert_eq!(plugin_stamp::read_section(&bytes).unwrap(), Some(manifest.as_bytes()));
+        assert_eq!(plugin_stamp::read_section(&fs::read(&built).unwrap()).unwrap(), None, "the build's own file stays unstamped");
+        let again = dir.join("again.wasm");
+        stamp_copy(&built, &again, "x").unwrap();
+        assert_eq!(fs::read(&again).unwrap(), bytes, "two stamps of one build are the same bytes");
+    }
+
+    #[test]
+    fn a_refused_module_fails_naming_the_plugin_and_leaves_no_file() {
+        let dir = scratch("refused");
+        let built = dir.join("bad.wasm");
+        fs::write(&built, b"\0asm\x01\0\0\0").unwrap();
+        let stamped = dir.join("stamped").join("bad.wasm");
+        fs::create_dir_all(stamped.parent().unwrap()).unwrap();
+        fs::write(&stamped, b"an earlier build's file").unwrap();
+        let err = stamp_copy(&built, &stamped, "bad-plugin").unwrap_err();
+        assert!(err.contains("plugins/bad-plugin") && err.contains("lcc_abi_version"), "{err}");
+        assert!(!stamped.exists(), "neither a half-written nor an earlier file is left");
     }
 
     #[test]

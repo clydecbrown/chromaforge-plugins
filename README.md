@@ -46,6 +46,11 @@ same `rev` as the SDK (`Cargo.toml` keeps the two equal; a test checks it). Afte
 back and requires exactly one section equal to `lcc_manifest`; a refusal fails the build, naming the plug-in, and
 leaves no `.wasm`. The stamped file is the one `release` checksums and publishes.
 
+The build then reads `id` and `version` back from the section and checks them against the package: the manifest's
+`version` must equal `Cargo.toml`'s, and both fields must be non-empty strings. `release` also refuses a manifest
+`id` that differs from the one `index.json` already lists for that plug-in (an app treats a changed `id` as a
+different plug-in, and its grants are lost); a first release, or an entry with no `id`, has nothing to compare.
+
 ## Versions
 
 Each plug-in has its own version, in its `Cargo.toml`. Its manifest reads it with `env!("CARGO_PKG_VERSION")`,

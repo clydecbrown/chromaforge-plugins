@@ -66,6 +66,8 @@ of a batch's files but not the rest.
   `plugin-stamp`). The section is a copy of `lcc_manifest`, not a second source: edit the manifest in code. Publish
   only the stamped file from `target/…/release/stamped/`, never the unstamped build.
 - **The version comes from Cargo:** the manifest reads `env!("CARGO_PKG_VERSION")`, never a version typed into it.
+  `cargo xtask plugin` and `release` enforce it: they read the stamped manifest and fail when its `version` differs
+  from `Cargo.toml`, or when it has no string `id` and `version`.
 
 ## Clean-room and licences
 

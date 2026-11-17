@@ -277,7 +277,10 @@ fn build_wasm(root: &Path, p: &Plugin) -> Result<PathBuf> {
     if !wasm.is_file() {
         return Err(format!("{} was not built", wasm.display()));
     }
-    stamp_copy(&wasm, &wasm.with_file_name("stamped").join(wasm.file_name().unwrap_or_default()), &p.dir)
+    let stamped = stamp_copy(&wasm, &wasm.with_file_name("stamped").join(wasm.file_name().unwrap_or_default()), &p.dir)?;
+    let bytes = fs::read(&stamped).map_err(|e| format!("{}: {e}", stamped.display()))?;
+    check_manifest(p, &bytes)?;
+    Ok(stamped)
 }
 
 /// Writes `stamped`: a copy of `built` with its manifest section. The build's own file stays as
@@ -298,6 +301,62 @@ fn stamp_copy(built: &Path, stamped: &Path, name: &str) -> Result<PathBuf> {
         fail(&e)
     })?;
     Ok(stamped.to_path_buf())
+}
+
+/// The two manifest fields the build checks.
+#[derive(Debug, PartialEq, Eq)]
+struct ManifestIds {
+    id: String,
+    version: String,
+}
+
+/// Reads `id` and `version` from the module's `photo-plugin.manifest` section, without running it. The
+/// section reader is the stamp tool's, which bounds every length and refuses a truncated module or
+/// a second section.
+fn read_manifest(wasm: &[u8]) -> Result<ManifestIds> {
+    let section = plugin_stamp::read_section(wasm).map_err(|e| e.to_string())?.ok_or("it has no photo-plugin.manifest section (not stamped)")?;
+    let manifest: Value = serde_json::from_slice(section).map_err(|e| format!("the manifest section isn't JSON: {e}"))?;
+    let field = |key: &str| match manifest.get(key).and_then(Value::as_str) {
+        Some(v) if !v.is_empty() => Ok(v.to_string()),
+        _ => Err(format!("the manifest has no `{key}` (a non-empty string)")),
+    };
+    Ok(ManifestIds { id: field("id")?, version: field("version")? })
+}
+
+/// The manifest of a stamped build must agree with the package: its `version` is Cargo's (`AGENTS.md`).
+fn check_manifest(p: &Plugin, wasm: &[u8]) -> Result<ManifestIds> {
+    let ids = read_manifest(wasm).map_err(|e| format!("plugins/{}: {e}", p.dir))?;
+    if ids.version != p.version {
+        return Err(format!(
+            "plugins/{}: the manifest says version {} but Cargo.toml says {}: the manifest must read the version from Cargo (env!(\"CARGO_PKG_VERSION\"))",
+            p.dir, ids.version, p.version
+        ));
+    }
+    Ok(ids)
+}
+
+/// A plug-in's manifest `id` is what the app matches on: a release whose `id` differs from the one
+/// `index.json` already lists for it would be a different plug-in, and would lose the grants. An entry
+/// with no `id` (or no entry: a first release) has nothing to compare.
+fn check_id_against_index(index: &Value, plugin: &str, id: &str) -> Result<()> {
+    match &index["plugins"][plugin]["id"] {
+        Value::Null => Ok(()),
+        Value::String(listed) if listed == id => Ok(()),
+        Value::String(listed) => Err(format!(
+            "plugins/{plugin}: the manifest id is {id}, but index.json lists {listed}: a changed id is a different plug-in to the app, and drops its grants"
+        )),
+        other => Err(format!("plugins/{plugin}: index.json lists an id that isn't a string: {other}")),
+    }
+}
+
+/// [`check_id_against_index`] against the `index.json` file, when there is one (a first release has none).
+fn check_id_against_index_file(file: &Path, plugin: &str, id: &str) -> Result<()> {
+    if !file.is_file() {
+        return Ok(());
+    }
+    let text = fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let index: Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+    check_id_against_index(&index, plugin, id)
 }
 
 /// Lowercase letters, digits and `-`, starting and ending with a letter or digit.
@@ -358,6 +417,8 @@ fn release(root: &Path, tag: &str, out: &Path) -> Result<()> {
 
     let built = build_wasm(root, &p)?;
     let bytes = fs::read(&built).map_err(|e| format!("{}: {e}", built.display()))?;
+    let id = read_manifest(&bytes).map_err(|e| format!("plugins/{name}: {e}"))?.id;
+    check_id_against_index_file(&root.join("index.json"), name, &id)?;
     let file = format!("{name}-{version}.wasm");
     let sha = sha256_hex(&bytes);
     let title = format!("{} plug-in {version}", p.display_name.as_deref().unwrap_or(name));
@@ -544,6 +605,109 @@ mod tests {
         let err = stamp_copy(&built, &stamped, "bad-plugin").unwrap_err();
         assert!(err.contains("plugins/bad-plugin") && err.contains("lcc_abi_version"), "{err}");
         assert!(!stamped.exists(), "neither a half-written nor an earlier file is left");
+    }
+
+    fn plugin_at(version: &str) -> Plugin {
+        Plugin { dir: "x".into(), package: "x".into(), version: version.into(), display_name: None, cdylib: None, path: PathBuf::new() }
+    }
+
+    /// `module(manifest)`, stamped.
+    fn stamped(manifest: &str) -> Vec<u8> {
+        plugin_stamp::stamp(&module(manifest), &plugin_stamp::Limits::default()).unwrap()
+    }
+
+    #[test]
+    fn the_manifest_id_and_version_are_read_from_the_section() {
+        let ids = read_manifest(&stamped(r#"{"id":"io.example.x","version":"1.2.3"}"#)).unwrap();
+        assert_eq!(ids, ManifestIds { id: "io.example.x".into(), version: "1.2.3".into() });
+    }
+
+    #[test]
+    fn a_module_without_a_manifest_section_is_refused_naming_the_plugin() {
+        let err = check_manifest(&plugin_at("1.0.0"), &module(r#"{"id":"a","version":"1.0.0"}"#)).unwrap_err();
+        assert!(err.contains("plugins/x") && err.contains("no photo-plugin.manifest section"), "{err}");
+    }
+
+    #[test]
+    fn a_manifest_that_is_not_json_or_lacks_id_or_version_is_refused() {
+        for (manifest, want) in [
+            ("not json", "isn't JSON"),
+            (r#"{"version":"1.0.0"}"#, "no `id`"),
+            (r#"{"id":"a"}"#, "no `version`"),
+            (r#"{"id":"","version":"1.0.0"}"#, "no `id`"),
+            (r#"{"id":"a","version":1}"#, "no `version`"),
+            (r#"["a"]"#, "no `id`"),
+        ] {
+            // a section that isn't what lcc_manifest returns can't come from `stamp`, so build it by hand
+            let mut wasm = module(manifest);
+            append_section(&mut wasm, manifest.as_bytes());
+            let err = check_manifest(&plugin_at("1.0.0"), &wasm).unwrap_err();
+            assert!(err.contains(want), "{manifest}: {err}");
+        }
+    }
+
+    /// Adds a `photo-plugin.manifest` custom section holding `payload`.
+    fn append_section(wasm: &mut Vec<u8>, payload: &[u8]) {
+        let name = b"photo-plugin.manifest";
+        let mut body = vec![name.len() as u8];
+        body.extend_from_slice(name);
+        body.extend_from_slice(payload);
+        wasm.push(0);
+        let mut len = body.len();
+        loop {
+            let byte = (len & 0x7f) as u8;
+            len >>= 7;
+            wasm.push(if len == 0 { byte } else { byte | 0x80 });
+            if len == 0 {
+                break;
+            }
+        }
+        wasm.extend_from_slice(&body);
+    }
+
+    #[test]
+    fn a_manifest_version_that_differs_from_cargo_is_refused() {
+        let wasm = stamped(r#"{"id":"a","version":"0.1.0"}"#);
+        assert!(check_manifest(&plugin_at("0.1.0"), &wasm).is_ok());
+        let err = check_manifest(&plugin_at("0.2.0"), &wasm).unwrap_err();
+        assert!(err.contains("plugins/x") && err.contains("0.1.0") && err.contains("0.2.0") && err.contains("Cargo"), "{err}");
+    }
+
+    #[test]
+    fn a_truncated_or_doubled_section_is_an_error_not_a_panic() {
+        let wasm = stamped(r#"{"id":"a","version":"1.0.0"}"#);
+        for cut in [wasm.len() - 1, wasm.len() - 10, 12, 9, 8, 3, 0] {
+            let err = read_manifest(wasm.get(..cut).unwrap_or_default());
+            assert!(err.is_err(), "cut at {cut} should be refused");
+        }
+        let mut doubled = wasm.clone();
+        append_section(&mut doubled, br#"{"id":"a","version":"1.0.0"}"#);
+        assert!(read_manifest(&doubled).unwrap_err().contains("2 photo-plugin.manifest sections"), "two sections");
+    }
+
+    #[test]
+    fn a_changed_manifest_id_is_refused_against_the_index() {
+        let index = json!({"format": 1, "plugins": {"x": {"id": "io.example.x", "version": "1.0.0"}, "y": {"version": "1.0.0"}}});
+        assert!(check_id_against_index(&index, "x", "io.example.x").is_ok());
+        let err = check_id_against_index(&index, "x", "io.example.other").unwrap_err();
+        assert!(err.contains("plugins/x") && err.contains("io.example.x") && err.contains("io.example.other") && err.contains("grants"), "{err}");
+        assert!(check_id_against_index(&index, "y", "anything").is_ok(), "an entry with no id has nothing to compare");
+        assert!(check_id_against_index(&index, "new", "anything").is_ok(), "a first release has no entry");
+        assert!(check_id_against_index(&Value::Null, "x", "a").is_ok(), "no index");
+        let odd = json!({"plugins": {"x": {"id": 7}}});
+        assert!(check_id_against_index(&odd, "x", "a").unwrap_err().contains("isn't a string"));
+    }
+
+    #[test]
+    fn the_index_file_is_read_for_the_check_and_may_be_missing() {
+        let dir = scratch("index-file");
+        let file = dir.join("index.json");
+        assert!(check_id_against_index_file(&file, "x", "a").is_ok(), "no file: a first release");
+        fs::write(&file, r#"{"format":1,"plugins":{"x":{"id":"b"}}}"#).unwrap();
+        assert!(check_id_against_index_file(&file, "x", "b").is_ok());
+        assert!(check_id_against_index_file(&file, "x", "a").unwrap_err().contains("lists b"));
+        fs::write(&file, "{ not json").unwrap();
+        assert!(check_id_against_index_file(&file, "x", "a").unwrap_err().contains("index.json"), "a damaged index is an error");
     }
 
     #[test]

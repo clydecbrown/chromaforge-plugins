@@ -12,7 +12,8 @@ versions and releases, and `plugins/README.md` explains how to add a plug-in.
   (`lcc-plugin-sdk` in `Cargo.toml`), not at Chromaforge's latest `main`. What a plug-in may call, its permissions
   and its budgets are all defined there.
 - **Bumping the SDK `rev` is a review first.** Read `git diff <old>..<new> -- crates/plugins sdk/` in Chromaforge
-  for changes to the ABI, the host calls and the permissions. Then bump, and run `cargo xtask ci`.
+  for changes to the ABI, the host calls and the permissions. Then bump, and run `cargo xtask ci`. Bump
+  `plugin-stamp` to the same `rev` (a test checks they match).
 - **Host features not merged yet:** build with `CHROMAFORGE_SDK=<Chromaforge checkout> cargo xtask …`, never
   by editing the SDK dependency or adding a `[patch]` to a tracked file. `xtask` patches each build and puts
   `Cargo.lock` back; plain `cargo` commands don't see the override.
@@ -61,6 +62,9 @@ of a batch's files but not the rest.
 - **Ask for as few permissions as possible.** Each one is an unticked checkbox at install, so the user decides from
   the plug-in's README, whose **Permissions** section says what each permission is for. A plug-in that asks for
   more in an update gets nothing new until the user approves it.
+- **The build stamps the manifest into the `.wasm`** (a `photo-plugin.manifest` section, Chromaforge's
+  `plugin-stamp`). The section is a copy of `lcc_manifest`, not a second source: edit the manifest in code. Publish
+  only the stamped file from `target/…/release/stamped/`, never the unstamped build.
 - **The version comes from Cargo:** the manifest reads `env!("CARGO_PKG_VERSION")`, never a version typed into it.
 
 ## Clean-room and licences

@@ -24,7 +24,7 @@ Several plug-ins share this repository, and each one is released on its own.
 rustup target add wasm32-unknown-unknown   # rust-toolchain.toml asks for it too
 cargo xtask ci                             # what CI runs on a pull request
 cargo xtask plugin <name>                  # one plug-in: layout check, wasm32 clippy, release build
-# → target/wasm32-unknown-unknown/release/<name>.wasm
+# → target/wasm32-unknown-unknown/release/stamped/<name>.wasm  (the stamped file)
 ```
 
 `cargo xtask check` runs fmt, clippy and the native tests of the whole workspace (shared crates, stand-ins
@@ -35,6 +35,16 @@ To build against host features that aren't merged yet, point `CHROMAFORGE_SDK` a
 `CHROMAFORGE_SDK=../chromaforge cargo xtask ci`. Every `xtask` build then uses that checkout's `sdk/plugin`,
 and `Cargo.lock` is put back afterwards, so nothing to commit changes. `cargo xtask release` refuses it: releases
 use the pinned SDK.
+
+### Stamping
+
+The build stamps each plug-in: `xtask` copies the built `.wasm` to `release/stamped/` and writes into the copy a
+`photo-plugin.manifest` custom section, so Chromaforge can read the manifest without running the module. The
+section is a copy of what `lcc_manifest` returns, not a second source: change the manifest in the plug-in's code,
+never in the section. The tool is Chromaforge's `plugin-stamp` (`sdk/stamp`), a git dependency of `xtask` at the
+same `rev` as the SDK (`Cargo.toml` keeps the two equal; a test checks it). After stamping, `xtask` reads the file
+back and requires exactly one section equal to `lcc_manifest`; a refusal fails the build, naming the plug-in, and
+leaves no `.wasm`. The stamped file is the one `release` checksums and publishes.
 
 ## Versions
 
@@ -61,7 +71,7 @@ Before tagging, `cargo xtask release <tag>` builds the release into `dist/` loca
 
 Release builds are reproducible: the toolchain is pinned (`rust-toolchain.toml`, bumped on purpose) and
 `xtask` maps build paths to `/cargo` and `/src`. So a tag built anywhere with that toolchain matches the
-published `.sha256`.
+published `.sha256`. Stamping is deterministic, so the stamped file is reproducible too.
 
 ### Finding the newest release
 

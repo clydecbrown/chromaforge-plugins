@@ -22,6 +22,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
+/// The longest `notes` an index entry carries, in characters.
+const NOTES_MAX: usize = 280;
 
 type Result<T, E = String> = std::result::Result<T, E>;
 
@@ -303,14 +305,18 @@ fn stamp_copy(built: &Path, stamped: &Path, name: &str) -> Result<PathBuf> {
     Ok(stamped.to_path_buf())
 }
 
-/// The two manifest fields the build checks.
+/// What the build reads from the manifest: the two fields it checks, and the two the index lists.
 #[derive(Debug, PartialEq, Eq)]
 struct ManifestIds {
     id: String,
     version: String,
+    /// Host features, as the manifest names them.
+    requires: Vec<String>,
+    /// Names of the permission groups the manifest asks for (`catalog`, `programs`, …), sorted.
+    permissions: Vec<String>,
 }
 
-/// Reads `id` and `version` from the module's `photo-plugin.manifest` section, without running it. The
+/// Reads `id`, `version`, `requires` and the permission groups from the module's `photo-plugin.manifest` section, without running it. The
 /// section reader is the stamp tool's, which bounds every length and refuses a truncated module or
 /// a second section.
 fn read_manifest(wasm: &[u8]) -> Result<ManifestIds> {
@@ -320,7 +326,27 @@ fn read_manifest(wasm: &[u8]) -> Result<ManifestIds> {
         Some(v) if !v.is_empty() => Ok(v.to_string()),
         _ => Err(format!("the manifest has no `{key}` (a non-empty string)")),
     };
-    Ok(ManifestIds { id: field("id")?, version: field("version")? })
+    let requires = match manifest.get("requires") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|v| v.as_str().map(str::to_string).ok_or_else(|| "the manifest's `requires` has an entry that isn't a string".to_string()))
+            .collect::<Result<_>>()?,
+        Some(_) => return Err("the manifest's `requires` isn't a list".into()),
+    };
+    let permissions = match manifest.get("permissions") {
+        None | Some(Value::Null) => Vec::new(),
+        // the host's groups are booleans or lists (`lcc-plugins` permissions.rs): `false` or `[]` asks for nothing
+        Some(Value::Object(groups)) => groups
+            .iter()
+            .filter(|(_, v)| !matches!(v, Value::Bool(false) | Value::Null) && v.as_array().is_none_or(|a| !a.is_empty()))
+            .map(|(k, _)| k.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        Some(_) => return Err("the manifest's `permissions` isn't an object".into()),
+    };
+    Ok(ManifestIds { id: field("id")?, version: field("version")?, requires, permissions })
 }
 
 /// The manifest of a stamped build must agree with the package: its `version` is Cargo's (`AGENTS.md`).
@@ -397,6 +423,64 @@ fn changelog_section(text: &str, version: &str) -> Option<String> {
     (!body.is_empty()).then_some(body)
 }
 
+/// What's new, as the update row shows it: the changelog section as plain text (no headings, bullets, emphasis,
+/// code marks or link targets), at most `max` characters, cut on a word boundary with an ellipsis. `None` when
+/// nothing is left.
+fn plain_notes(section: &str, max: usize) -> Option<String> {
+    let mut text = String::new();
+    for line in section.lines() {
+        let line = line.trim();
+        // a heading ("### Added") labels the list under it, it isn't part of the note
+        if line.starts_with("# ") || line.starts_with("## ") || line.starts_with("### ") || line.starts_with("#### ") {
+            continue;
+        }
+        let line = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")).unwrap_or(line);
+        text.push_str(line);
+        text.push(' ');
+    }
+    // `[label](target)` keeps its label; emphasis and code marks go
+    let mut plain = String::new();
+    let mut rest = text.as_str();
+    while let Some(open) = rest.find('[') {
+        let (before, tail) = rest.split_at(open);
+        plain.push_str(before);
+        let link = tail.find("](").filter(|&mid| !tail[1..mid].contains('[')).and_then(|mid| tail[mid + 2..].find(')').map(|end| (mid, end)));
+        match link {
+            Some((mid, end)) => {
+                plain.push_str(&tail[1..mid]);
+                rest = &tail[mid + 2 + end + 1..];
+            }
+            None => {
+                plain.push('[');
+                rest = &tail[1..];
+            }
+        }
+    }
+    plain.push_str(rest);
+    let plain: String = plain.chars().filter(|c| !matches!(c, '*' | '`')).collect();
+    let words: Vec<&str> = plain.split_whitespace().collect();
+    let full = words.join(" ");
+    if full.is_empty() {
+        return None;
+    }
+    if full.chars().count() <= max {
+        return Some(full);
+    }
+    let mut cut = String::new();
+    for word in words {
+        let next = if cut.is_empty() { word.to_string() } else { format!("{cut} {word}") };
+        if next.chars().count() + 1 > max {
+            break;
+        }
+        cut = next;
+    }
+    // a first word longer than the cap is cut mid-word, as there is no boundary
+    if cut.is_empty() {
+        cut = full.chars().take(max.saturating_sub(1)).collect();
+    }
+    Some(format!("{cut}…"))
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -417,8 +501,9 @@ fn release(root: &Path, tag: &str, out: &Path) -> Result<()> {
 
     let built = build_wasm(root, &p)?;
     let bytes = fs::read(&built).map_err(|e| format!("{}: {e}", built.display()))?;
-    let id = read_manifest(&bytes).map_err(|e| format!("plugins/{name}: {e}"))?.id;
-    check_id_against_index_file(&root.join("index.json"), name, &id)?;
+    let manifest = read_manifest(&bytes).map_err(|e| format!("plugins/{name}: {e}"))?;
+    let id = &manifest.id;
+    check_id_against_index_file(&root.join("index.json"), name, id)?;
     let file = format!("{name}-{version}.wasm");
     let sha = sha256_hex(&bytes);
     let title = format!("{} plug-in {version}", p.display_name.as_deref().unwrap_or(name));
@@ -428,8 +513,11 @@ fn release(root: &Path, tag: &str, out: &Path) -> Result<()> {
     write(&file, &bytes)?;
     write(&format!("{file}.sha256"), format!("{sha}  {file}\n").as_bytes())?;
     write("notes.md", format!("{notes}\n\nSHA-256 of `{file}`: `{sha}`\n").as_bytes())?;
-    let record = json!({"plugin": name, "name": p.display_name, "version": version, "tag": tag,
-        "title": title, "file": file, "sha256": sha});
+    let mut record = json!({"plugin": name, "name": p.display_name, "version": version, "tag": tag,
+        "title": title, "file": file, "sha256": sha, "id": id, "requires": manifest.requires, "permissions": manifest.permissions});
+    if let Some(notes) = plain_notes(&notes, NOTES_MAX) {
+        record["notes"] = Value::String(notes);
+    }
     write("release.json", format!("{record:#}\n").as_bytes())?;
 
     eprintln!("{title}: {} ({} bytes, sha256 {sha})", out.join(&file).display(), bytes.len());
@@ -447,6 +535,12 @@ fn release(root: &Path, tag: &str, out: &Path) -> Result<()> {
 fn update_index(index: &mut Value, record: &Value, repo: &str) -> Result<()> {
     let field = |k: &str| record[k].as_str().ok_or_else(|| format!("release.json has no {k}"));
     let (plugin, tag, file) = (field("plugin")?, field("tag")?, field("file")?);
+    let id = field("id").ok().filter(|id| !id.is_empty()).ok_or("release.json has no id")?;
+    let list = |k: &str| match &record[k] {
+        Value::Null => Ok(json!([])),
+        v @ Value::Array(items) if items.iter().all(Value::is_string) => Ok(v.clone()),
+        _ => Err(format!("release.json: {k} is not a list of strings")),
+    };
     if !index.is_object() {
         *index = json!({"format": 1, "plugins": {}});
     }
@@ -455,13 +549,20 @@ fn update_index(index: &mut Value, record: &Value, repo: &str) -> Result<()> {
         plugin.to_string(),
         json!({
             "name": record["name"],
+            "id": id,
             "version": field("version")?,
+            "requires": list("requires")?,
+            "permissions": list("permissions")?,
             "tag": tag,
             "url": format!("https://github.com/{repo}/releases/download/{tag}/{file}"),
             "sha256": field("sha256")?,
             "releases": format!("https://github.com/{repo}/releases?q={plugin}-v&expanded=true"),
+            "changelog": format!("https://github.com/{repo}/blob/{tag}/plugins/{plugin}/CHANGELOG.md"),
         }),
     );
+    if let Some(notes) = record["notes"].as_str().filter(|n| !n.is_empty()) {
+        plugins[plugin]["notes"] = Value::String(notes.to_string());
+    }
     Ok(())
 }
 
@@ -470,6 +571,9 @@ fn index(record: &Path, repo: &str, file: &Path) -> Result<()> {
     let record: Value = serde_json::from_str(&read(record)?).map_err(|e| format!("release.json: {e}"))?;
     let mut index = if file.exists() { serde_json::from_str(&read(file)?).map_err(|e| format!("{}: {e}", file.display()))? } else { Value::Null };
     update_index(&mut index, &record, repo)?;
+    if record["notes"].as_str().is_none_or(str::is_empty) {
+        eprintln!("release.json has no notes: the index entry has none either");
+    }
     fs::write(file, format!("{index:#}\n")).map_err(|e| format!("{}: {e}", file.display()))
 }
 
@@ -511,10 +615,7 @@ mod tests {
     #[test]
     fn the_index_keeps_one_entry_per_plugin() {
         let mut index = Value::Null;
-        let rec = |plugin: &str, v: &str| {
-            json!({"plugin": plugin, "name": "X", "version": v, "tag": format!("{plugin}-v{v}"),
-                "file": format!("{plugin}-{v}.wasm"), "sha256": "ab"})
-        };
+        let rec = full_rec;
         update_index(&mut index, &rec("pureraw", "0.1.0"), "o/r").unwrap();
         update_index(&mut index, &rec("other", "1.0.0"), "o/r").unwrap();
         update_index(&mut index, &rec("pureraw", "0.2.0"), "o/r").unwrap();
@@ -523,6 +624,84 @@ mod tests {
         assert_eq!(index["plugins"]["pureraw"]["version"], "0.2.0");
         assert_eq!(index["plugins"]["pureraw"]["url"], "https://github.com/o/r/releases/download/pureraw-v0.2.0/pureraw-0.2.0.wasm");
         assert_eq!(index["plugins"]["other"]["version"], "1.0.0");
+    }
+
+    fn full_rec(plugin: &str, v: &str) -> Value {
+        json!({"plugin": plugin, "name": "X", "version": v, "tag": format!("{plugin}-v{v}"), "file": format!("{plugin}-{v}.wasm"),
+            "sha256": "ab", "id": format!("io.example.{plugin}"), "requires": ["settings"], "permissions": ["catalog", "programs"],
+            "notes": "Faster sends."})
+    }
+
+    #[test]
+    fn an_index_entry_carries_the_manifest_fields_and_the_changelog_link() {
+        let mut index = Value::Null;
+        update_index(&mut index, &full_rec("pureraw", "0.2.0"), "o/r").unwrap();
+        let e = &index["plugins"]["pureraw"];
+        assert_eq!(index["format"], 1);
+        assert_eq!(e["id"], "io.example.pureraw");
+        assert_eq!(e["requires"], json!(["settings"]));
+        assert_eq!(e["permissions"], json!(["catalog", "programs"]));
+        assert_eq!(e["notes"], "Faster sends.");
+        assert_eq!(e["changelog"], "https://github.com/o/r/blob/pureraw-v0.2.0/plugins/pureraw/CHANGELOG.md");
+        assert!(e["releases"].is_string(), "the existing link stays");
+    }
+
+    #[test]
+    fn an_entry_is_replaced_whole() {
+        let mut index = Value::Null;
+        update_index(&mut index, &full_rec("pureraw", "0.2.0"), "o/r").unwrap();
+        let mut next = full_rec("pureraw", "0.3.0");
+        next["requires"] = json!([]);
+        next["permissions"] = json!(["catalog"]);
+        next.as_object_mut().unwrap().remove("notes");
+        update_index(&mut index, &next, "o/r").unwrap();
+        let e = &index["plugins"]["pureraw"];
+        assert_eq!(e["requires"], json!([]), "a requires the new version no longer has is gone");
+        assert_eq!(e["permissions"], json!(["catalog"]));
+        assert!(e.get("notes").is_none(), "an earlier version's notes don't stay");
+    }
+
+    #[test]
+    fn an_index_with_older_entries_still_takes_a_new_release() {
+        let mut index = json!({"format": 1, "plugins": {"old": {"name": "O", "version": "1.0.0", "tag": "old-v1.0.0", "url": "u", "sha256": "ab"}}});
+        update_index(&mut index, &full_rec("pureraw", "0.2.0"), "o/r").unwrap();
+        assert_eq!(index["plugins"]["old"]["version"], "1.0.0");
+        assert!(index["plugins"]["old"].get("id").is_none(), "the older entry is left as it was");
+        assert_eq!(index["plugins"].as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_release_record_without_an_id_is_refused_by_name() {
+        let mut rec = full_rec("pureraw", "0.2.0");
+        rec.as_object_mut().unwrap().remove("id");
+        let err = update_index(&mut Value::Null, &rec, "o/r").unwrap_err();
+        assert!(err.contains("release.json has no id"), "{err}");
+        rec["id"] = json!("");
+        assert!(update_index(&mut Value::Null, &rec, "o/r").unwrap_err().contains("has no id"), "an empty id is none");
+        rec["id"] = json!("a");
+        rec["requires"] = json!("settings");
+        assert!(update_index(&mut Value::Null, &rec, "o/r").unwrap_err().contains("requires"));
+    }
+
+    #[test]
+    fn notes_are_plain_text_cut_on_a_word_boundary() {
+        let section =
+            "### Added\n\n- **Faster** sends, see [the manual](https://example.org/m).\n- Uses `lcc_manifest` now.\n\n### Fixed\n\n- Fixes #12.\n";
+        assert_eq!(
+            plain_notes(section, 280).as_deref(),
+            Some("Faster sends, see the manual. Uses lcc_manifest now. Fixes #12."),
+            "no heading words; an issue number keeps its #"
+        );
+        assert_eq!(plain_notes("### Added\n", 280), None, "a heading alone is no note");
+        assert_eq!(plain_notes("#12 is fixed", 280).as_deref(), Some("#12 is fixed"), "a line starting with an issue number is prose");
+        let long = "word ".repeat(100);
+        let cut = plain_notes(&long, 280).unwrap();
+        assert!(cut.chars().count() <= 280 && cut.ends_with("word…"), "{cut}");
+        assert_eq!(plain_notes("one two three", 9).as_deref(), Some("one two…"));
+        assert_eq!(plain_notes("abcdefghijkl", 5).as_deref(), Some("abcd…"), "no boundary: cut the word");
+        assert_eq!(plain_notes("ééééééé", 4).as_deref(), Some("ééé…"), "cuts at characters, not bytes");
+        assert_eq!(plain_notes("\n  \n", 280), None);
+        assert_eq!(plain_notes("[x] and [a](b", 280).as_deref(), Some("[x] and [a](b"), "unclosed marks stay as text");
     }
 
     #[test]
@@ -619,7 +798,30 @@ mod tests {
     #[test]
     fn the_manifest_id_and_version_are_read_from_the_section() {
         let ids = read_manifest(&stamped(r#"{"id":"io.example.x","version":"1.2.3"}"#)).unwrap();
-        assert_eq!(ids, ManifestIds { id: "io.example.x".into(), version: "1.2.3".into() });
+        assert_eq!(ids, ManifestIds { id: "io.example.x".into(), version: "1.2.3".into(), requires: vec![], permissions: vec![] });
+    }
+
+    #[test]
+    fn requires_and_the_permission_groups_are_read_from_the_section() {
+        let m = r#"{"id":"a","version":"1.0.0","requires":["settings","programs"],
+            "permissions":{"programs":[{"id":"p"}],"catalog":true,"fs":[],"net":false,"libraryAdd":true}}"#;
+        let ids = read_manifest(&stamped(m)).unwrap();
+        assert_eq!(ids.requires, ["settings", "programs"], "as the manifest has them");
+        assert_eq!(ids.permissions, ["catalog", "libraryAdd", "programs"], "sorted; a group set to false or [] asks for nothing");
+    }
+
+    #[test]
+    fn a_requires_or_permissions_of_the_wrong_shape_is_refused() {
+        for (manifest, want) in [
+            (r#"{"id":"a","version":"1.0.0","requires":"settings"}"#, "`requires` isn't a list"),
+            (r#"{"id":"a","version":"1.0.0","requires":[1]}"#, "`requires` has an entry"),
+            (r#"{"id":"a","version":"1.0.0","permissions":["catalog"]}"#, "`permissions` isn't an object"),
+        ] {
+            let mut wasm = module(manifest);
+            append_section(&mut wasm, manifest.as_bytes());
+            let err = read_manifest(&wasm).unwrap_err();
+            assert!(err.contains(want), "{manifest}: {err}");
+        }
     }
 
     #[test]

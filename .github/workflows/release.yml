@@ -5,7 +5,8 @@
 # "<display name> plug-in <version>" and carries <plug-in>-<version>.wasm, its .sha256 and the changelog
 # section. The .wasm is signed with the author key (the PLUGIN_SIGNING_KEY secret; PLUGIN_SIGNER, a repository
 # variable, is the fingerprint it must belong to), and the signed file is checked again before it is published.
-# Then index.json on main gets that plug-in's entry. Other plug-ins aren't touched.
+# Then index.json on the `index` branch (a branch that holds only that file, so `main` can stay protected; made
+# once by hand, never by this workflow) gets that plug-in's entry. Other plug-ins aren't touched.
 name: Release
 
 on:
@@ -33,6 +34,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      # Before anything is built or published: a release with nowhere to record itself would leave the feed behind.
+      # Unauthenticated, so it needs this repository to be public (a private one would report the branch as missing).
+      - name: The index branch exists
+        run: |
+          git ls-remote --exit-code --heads "https://github.com/$GITHUB_REPOSITORY" index >/dev/null ||
+            { echo "::error::the index branch doesn't exist. Make it once by hand (README, Releasing); a release never starts a new index"; exit 1; }
+
+      # The feed's current index.json, next to the tagged tree. No checkout keeps the token: only the last step gets it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: index
+          path: feed
+          persist-credentials: false
 
       - name: The tagged commit is on main
         run: |
@@ -55,7 +71,7 @@ jobs:
         env:
           PLUGIN_SIGNING_KEY: ${{ secrets.PLUGIN_SIGNING_KEY }}
           PLUGIN_SIGNER: ${{ vars.PLUGIN_SIGNER }}
-        run: ./target/debug/xtask release "$TAG" --out dist --sign
+        run: ./target/debug/xtask release "$TAG" --out dist --index feed/index.json --sign
 
       - name: Check the signature on the file to publish
         env:
@@ -72,14 +88,19 @@ jobs:
           gh release create "$TAG" --verify-tag --title "$TITLE" --notes-file dist/notes.md \
             "dist/$FILE" "dist/$FILE.sha256"
 
-      - name: Update index.json on main
+      - name: Update index.json on the index branch
+        working-directory: feed
         env:
-          FILE: ${{ steps.build.outputs.file }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git checkout main
-          cargo xtask index dist/release.json --repo "$GITHUB_REPOSITORY"
+          ../target/debug/xtask index ../dist/release.json --repo "$GITHUB_REPOSITORY" --file index.json
           git add index.json
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
               commit -m "index: $TAG"
-          git push origin main
+          # The header is the token in another form, which GitHub doesn't mask: mask it, and keep it out of argv.
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
+            git push "https://github.com/$GITHUB_REPOSITORY" HEAD:refs/heads/index

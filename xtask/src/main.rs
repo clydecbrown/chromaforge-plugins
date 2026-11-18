@@ -5,10 +5,11 @@
 //! - `check`: fmt, clippy and the native tests of the whole workspace.
 //! - `plugins`: the plug-in folder names as a JSON array (CI's matrix).
 //! - `plugin <name>`: one plug-in's layout, its wasm32 clippy and its release build, stamped with its manifest.
-//! - `release <tag> [--out <dir>]`: checks a `<name>-v<version>` tag against `plugins/<name>`, builds
+//! - `release <tag> [--out <dir>] [--index <file>]`: checks a `<name>-v<version>` tag against `plugins/<name>`, builds
 //!   that plug-in only, and writes `<name>-<version>.wasm`, its `.sha256`, `notes.md` (the changelog
-//!   section) and `release.json` to `<dir>` (default `dist`).
-//! - `index <release.json> --repo <owner/name> [--file <path>]`: puts that release into `index.json`.
+//!   section) and `release.json` to `<dir>` (default `dist`). `--index` is the index file the manifest `id` is
+//!   checked against (default `index.json` in the workspace).
+//! - `index <release.json> --repo <owner/name> [--file <path>]`: puts that release into the index file (default `index.json` in the workspace).
 //!
 //! `CHROMAFORGE_SDK=<Chromaforge checkout>` builds against that checkout's `sdk/plugin` instead of the pinned
 //! `rev`, for host features not merged yet: each cargo call gets the patch as `--config` and runs without
@@ -72,9 +73,10 @@ fn run(args: &[String]) -> Result<()> {
             plugin(&root, &find_plugin(&root, name)?)
         }
         Some("release") => {
-            let tag = rest.first().ok_or("usage: release <tag> [--out <dir>] [--sign]")?;
+            let tag = rest.first().ok_or("usage: release <tag> [--out <dir>] [--index <file>] [--sign]")?;
             let out = flag(rest, "--out").map_or_else(|| root.join("dist"), PathBuf::from);
-            release(&root, tag, &out, rest.iter().any(|a| a == "--sign"))
+            let index = index_path(&root, rest, "--index");
+            release(&root, tag, &out, &index, rest.iter().any(|a| a == "--sign"))
         }
         Some("verify") => {
             let [file] = rest else { return Err("usage: verify <plug-in.wasm>".into()) };
@@ -88,7 +90,7 @@ fn run(args: &[String]) -> Result<()> {
         Some("index") => {
             let record = rest.first().ok_or("usage: index <release.json> --repo <owner/name> [--file <path>]")?;
             let repo = flag(rest, "--repo").ok_or("index needs --repo <owner/name>")?;
-            let file = flag(rest, "--file").map_or_else(|| root.join("index.json"), PathBuf::from);
+            let file = index_path(&root, rest, "--file");
             index(Path::new(record), &repo, &file)
         }
         _ => Err("usage: cargo xtask <ci | check | plugins | plugin <name> | release <tag> [--sign] | verify <file> | index <release.json>>".into()),
@@ -539,7 +541,12 @@ fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn release(root: &Path, tag: &str, out: &Path, sign: bool) -> Result<()> {
+/// The index file a command was told to use by `flag`, or `index.json` in the workspace.
+fn index_path(root: &Path, args: &[String], flag_name: &str) -> PathBuf {
+    flag(args, flag_name).map_or_else(|| root.join("index.json"), PathBuf::from)
+}
+
+fn release(root: &Path, tag: &str, out: &Path, index: &Path, sign: bool) -> Result<()> {
     let (name, version) = parse_tag(tag)?;
     let p = find_plugin(root, name)?;
     let problems = layout_problems(&p);
@@ -557,7 +564,7 @@ fn release(root: &Path, tag: &str, out: &Path, sign: bool) -> Result<()> {
     let bytes = fs::read(&built).map_err(|e| format!("{}: {e}", built.display()))?;
     let manifest = read_manifest(&bytes).map_err(|e| format!("plugins/{name}: {e}"))?;
     let id = &manifest.id;
-    check_id_against_index_file(&root.join("index.json"), name, id)?;
+    check_id_against_index_file(index, name, id)?;
     let file = format!("{name}-{version}.wasm");
     let (key, expected) = (env::var(SIGNING_KEY_ENV).ok(), env::var(SIGNER_ENV).ok());
     let signing = if sign {
@@ -978,6 +985,29 @@ mod tests {
         assert!(check_id_against_index_file(&file, "x", "a").unwrap_err().contains("lists b"));
         fs::write(&file, "{ not json").unwrap();
         assert!(check_id_against_index_file(&file, "x", "a").unwrap_err().contains("index.json"), "a damaged index is an error");
+    }
+
+    #[test]
+    fn the_index_path_is_the_flag_or_the_workspace_file() {
+        let args: Vec<String> = ["release", "t", "--index", "/feed/index.json"].map(String::from).to_vec();
+        assert_eq!(index_path(Path::new("/ws"), &args, "--index"), PathBuf::from("/feed/index.json"));
+        assert_eq!(index_path(Path::new("/ws"), &args, "--file"), PathBuf::from("/ws/index.json"), "no flag: the workspace file");
+    }
+
+    #[test]
+    fn an_index_run_writes_to_the_path_it_is_given_and_leaves_the_workspace_file_alone() {
+        let (ws, feed) = (scratch("index-ws"), scratch("index-feed"));
+        let workspace_file = ws.join("index.json");
+        fs::write(&workspace_file, "untouched\n").unwrap();
+        let record = ws.join("release.json");
+        fs::write(&record, serde_json::to_string(&full_rec("pureraw", "0.2.0")).unwrap()).unwrap();
+        let target = feed.join("index.json");
+        fs::write(&target, r#"{"format":1,"plugins":{"old":{"name":"O","version":"1.0.0","tag":"old-v1.0.0","url":"u","sha256":"ab"}}}"#).unwrap();
+        index(&record, "o/r", &target).unwrap();
+        let written: Value = serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
+        assert_eq!(written["plugins"]["pureraw"]["version"], "0.2.0", "the entry went to the given file");
+        assert_eq!(written["plugins"]["old"]["version"], "1.0.0", "the other plug-in's entry is kept");
+        assert_eq!(fs::read_to_string(&workspace_file).unwrap(), "untouched\n", "the workspace file is not written");
     }
 
     const MANIFEST: &str = r#"{"id":"io.example.x","version":"1.0.0"}"#;

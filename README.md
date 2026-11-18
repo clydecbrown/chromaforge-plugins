@@ -16,7 +16,7 @@ Several plug-ins share this repository, and each one is released on its own.
 | `tools/` | test stand-ins for the programs plug-ins talk to, so the round trip runs in CI. Every folder here is a crate (the workspace takes `tools/*`) |
 | `fixtures/` | shared test input |
 | `xtask/` | repository tasks: CI checks, release builds, `index.json` |
-| `index.json` | the current release of every plug-in, kept up to date by the release workflow |
+| `index` branch | not in this tree: a branch holding only `index.json`, the current release of every plug-in, kept up to date by the release workflow (Releases) |
 
 ## Building
 
@@ -95,10 +95,18 @@ A tag `<name>-v<version>` releases that plug-in alone:
    tag is on `main`, that `plugins/<name>` exists, and that its version and changelog section match the tag.
    Then it builds only that plug-in for `wasm32-unknown-unknown` and publishes a release titled
    "<Display name> plug-in <version>". The release holds the signed `<name>-<version>.wasm` (see Signing), a `.sha256` of
-   it and the changelog section as notes. Finally the workflow updates the plug-in's entry in `index.json` on `main`.
+   it and the changelog section as notes. Finally the workflow updates the plug-in's entry in `index.json` on the `index` branch.
    Other plug-ins aren't touched.
 
-Before tagging, `cargo xtask release <tag>` builds the release into `dist/` locally, without publishing.
+The `index` branch is made once, by hand, and a release fails (before building anything) when it is missing, so a
+mistyped name can't start a second index that drops the other plug-ins' entries:
+
+```sh
+git switch --orphan index && echo '{"format": 1, "plugins": {}}' > index.json && git add index.json &&
+  git commit -m "index: start" && git push origin index && git switch main
+```
+
+Before tagging, `cargo xtask release <tag>` builds the release into `dist/` locally (checking the manifest `id` against `index.json` in the workspace if there is one, or `--index <file>`), without publishing.
 
 Release builds are reproducible: the toolchain is pinned (`rust-toolchain.toml`, bumped on purpose) and
 `xtask` maps build paths to `/cargo` and `/src`. So a tag built anywhere with that toolchain matches the
@@ -107,8 +115,11 @@ its `.sha256` are of that file plus the author's signature, which a rebuild comp
 
 ### Finding the newest release
 
+The feed is `https://raw.githubusercontent.com/clydecbrown/chromaforge-plugins/index/index.json` (raw URLs are cached for
+about five minutes, so a new release shows up after that).
+
 GitHub's "latest release" is per repository, so it points at whichever plug-in shipped last. Each plug-in's
-README links to its own releases instead (`…/releases?q=<name>-v&expanded=true`). `index.json` lists every
+README links to its own releases instead (`…/releases?q=<name>-v&expanded=true`). `index.json`, on the `index` branch (so `main` takes pull requests only), lists every
 plug-in's current version, download URL and SHA-256 in one file, in the form a plug-in store could read:
 
 ```json

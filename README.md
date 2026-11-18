@@ -88,11 +88,28 @@ plug-in's current version, download URL and SHA-256 in one file, in the form a p
 {
   "format": 1,
   "plugins": {
-    "<name>": { "name": "…", "version": "0.1.0", "tag": "<name>-v0.1.0", "url": "…/<name>-0.1.0.wasm",
-                "sha256": "…", "releases": "…/releases?q=<name>-v&expanded=true" }
+    "<name>": { "name": "…", "id": "io.example.name", "version": "0.1.0", "tag": "<name>-v0.1.0",
+                "url": "…/<name>-0.1.0.wasm", "sha256": "…", "requires": ["settings"],
+                "permissions": ["catalog", "programs"], "notes": "…",
+                "changelog": "…/blob/<name>-v0.1.0/plugins/<name>/CHANGELOG.md",
+                "releases": "…/releases?q=<name>-v&expanded=true" }
   }
 }
 ```
+
+An app finds a plug-in's entry by `id`, the manifest's, since the key is the folder name. Everything but `notes` is
+read from the built module, never typed by hand:
+
+- `id`, `requires` (host features, as the manifest has them) and `permissions` (the names of the permission
+  groups it asks for, such as `catalog` or `programs`; a list for a quick look before downloading, while the
+  values themselves are in the module and shown at install) come from the manifest section. A plug-in that asks
+  for no permissions has an empty list.
+- `notes` is the changelog section for the released version as plain text (no headings, links or markup), at most
+  280 characters, cut on a word boundary with `…`. An entry is replaced whole by each release, so notes, `requires`
+  and `permissions` never carry over from an earlier version. `release` already needs a changelog section for the
+  version; if the section reduces to nothing, the entry has no `notes` and `index` says so.
+- `changelog` links the plug-in's `CHANGELOG.md` at the release's tag; `releases` is still the list of releases.
+- `format` stays 1: only fields were added, and entries from before them are read as they were.
 
 ## CI
 

@@ -3,7 +3,9 @@
 # checks that plugins/<plug-in> exists and that its Cargo.toml version and CHANGELOG.md section match
 # the tag, then builds only that plug-in for wasm32-unknown-unknown. The release is titled
 # "<display name> plug-in <version>" and carries <plug-in>-<version>.wasm, its .sha256 and the changelog
-# section. Then index.json on main gets that plug-in's entry. Other plug-ins aren't touched.
+# section. The .wasm is signed with the author key (the PLUGIN_SIGNING_KEY secret; PLUGIN_SIGNER, a repository
+# variable, is the fingerprint it must belong to), and the signed file is checked again before it is published.
+# Then index.json on main gets that plug-in's entry. Other plug-ins aren't touched.
 name: Release
 
 on:
@@ -46,8 +48,20 @@ jobs:
           cargo xtask check
           cargo xtask plugin "${TAG%-v*}"
 
+      # The only step that gets the signing key. It runs the xtask built by the step above, not `cargo xtask`, so
+      # no cargo process (and no build script or proc-macro) is started with the key in its environment, and
+      # xtask takes the key out of the environment of every cargo it starts itself.
       - id: build
-        run: cargo xtask release "$TAG" --out dist
+        env:
+          PLUGIN_SIGNING_KEY: ${{ secrets.PLUGIN_SIGNING_KEY }}
+          PLUGIN_SIGNER: ${{ vars.PLUGIN_SIGNER }}
+        run: ./target/debug/xtask release "$TAG" --out dist --sign
+
+      - name: Check the signature on the file to publish
+        env:
+          PLUGIN_SIGNER: ${{ vars.PLUGIN_SIGNER }}
+          FILE: ${{ steps.build.outputs.file }}
+        run: ./target/debug/xtask verify "dist/$FILE"
 
       - name: Publish the release
         env:

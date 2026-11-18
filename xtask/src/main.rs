@@ -24,6 +24,11 @@ use sha2::{Digest, Sha256};
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
 /// The longest `notes` an index entry carries, in characters.
 const NOTES_MAX: usize = 280;
+/// The author's secret key, in the key file's text (`plugin-stamp keygen`): a CI secret. Only `release --sign`
+/// reads it, and no build step it starts gets it.
+const SIGNING_KEY_ENV: &str = "PLUGIN_SIGNING_KEY";
+/// The fingerprint of the key a release must be signed by (a public value, kept as a repository variable).
+const SIGNER_ENV: &str = "PLUGIN_SIGNER";
 
 type Result<T, E = String> = std::result::Result<T, E>;
 
@@ -67,9 +72,18 @@ fn run(args: &[String]) -> Result<()> {
             plugin(&root, &find_plugin(&root, name)?)
         }
         Some("release") => {
-            let tag = rest.first().ok_or("usage: release <tag> [--out <dir>]")?;
+            let tag = rest.first().ok_or("usage: release <tag> [--out <dir>] [--sign]")?;
             let out = flag(rest, "--out").map_or_else(|| root.join("dist"), PathBuf::from);
-            release(&root, tag, &out)
+            release(&root, tag, &out, rest.iter().any(|a| a == "--sign"))
+        }
+        Some("verify") => {
+            let [file] = rest else { return Err("usage: verify <plug-in.wasm>".into()) };
+            let bytes = fs::read(file).map_err(|e| format!("{file}: {e}"))?;
+            let fingerprint =
+                verify_signed(&bytes, &env::var(SIGNER_ENV).map_err(|_| format!("verify needs {SIGNER_ENV} (the expected signer's fingerprint)"))?)
+                    .map_err(|e| format!("{file}: {e}"))?;
+            eprintln!("{file}: stamped, and signed by {fingerprint}");
+            Ok(())
         }
         Some("index") => {
             let record = rest.first().ok_or("usage: index <release.json> --repo <owner/name> [--file <path>]")?;
@@ -77,7 +91,7 @@ fn run(args: &[String]) -> Result<()> {
             let file = flag(rest, "--file").map_or_else(|| root.join("index.json"), PathBuf::from);
             index(Path::new(record), &repo, &file)
         }
-        _ => Err("usage: cargo xtask <ci | check | plugins | plugin <name> | release <tag> | index <release.json>>".into()),
+        _ => Err("usage: cargo xtask <ci | check | plugins | plugin <name> | release <tag> [--sign] | verify <file> | index <release.json>>".into()),
     }
 }
 
@@ -93,6 +107,14 @@ fn cargo(root: &Path, args: &[&str]) -> Result<()> {
     cargo_with(root, args, &[])
 }
 
+/// A cargo process. It never gets the signing key: build scripts and proc-macros run inside it, and only
+/// the signing step needs the key.
+fn cargo_command(root: &Path, args: &[String], envs: &[(&str, String)]) -> Command {
+    let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    cmd.args(args).envs(envs.iter().map(|(k, v)| (k, v))).env_remove(SIGNING_KEY_ENV).current_dir(root);
+    cmd
+}
+
 fn cargo_with(root: &Path, args: &[&str], envs: &[(&str, String)]) -> Result<()> {
     let mut args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
     // After the subcommand, not before: `cargo clippy` runs its own `cargo check`, which only sees the
@@ -104,12 +126,7 @@ fn cargo_with(root: &Path, args: &[&str], envs: &[(&str, String)]) -> Result<()>
         args.splice(1..1, ["--config".to_string(), sdk.patch_config()]);
     }
     eprintln!("$ cargo {}", args.join(" "));
-    let status = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-        .args(&args)
-        .envs(envs.iter().map(|(k, v)| (k, v)))
-        .current_dir(root)
-        .status()
-        .map_err(|e| format!("cargo: {e}"))?;
+    let status = cargo_command(root, &args, envs).status().map_err(|e| format!("cargo: {e}"))?;
     if status.success() { Ok(()) } else { Err(format!("cargo {} failed", args.join(" "))) }
 }
 
@@ -191,11 +208,8 @@ struct Plugin {
 }
 
 fn plugins(root: &Path) -> Result<Vec<Plugin>> {
-    let out = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-        .args(["metadata", "--no-deps", "--format-version", "1"])
-        .current_dir(root)
-        .output()
-        .map_err(|e| format!("cargo metadata: {e}"))?;
+    let args = ["metadata", "--no-deps", "--format-version", "1"].map(String::from);
+    let out = cargo_command(root, &args, &[]).output().map_err(|e| format!("cargo metadata: {e}"))?;
     if !out.status.success() {
         return Err(format!("cargo metadata: {}", String::from_utf8_lossy(&out.stderr)));
     }
@@ -481,11 +495,51 @@ fn plain_notes(section: &str, max: usize) -> Option<String> {
     Some(format!("{cut}…"))
 }
 
+/// Signs a stamped module with the author's key, then checks the result as the app will: the stamp still
+/// holds, and the signature is valid and by `expected`, a fingerprint. Signing changes the file, so whatever
+/// is checksummed or published comes after this, and nothing stamps the file again (stamping drops the
+/// signature). The key must be the expected signer's before anything is signed.
+fn sign_stamped(stamped: &[u8], key_text: &str, expected: &str) -> Result<Vec<u8>> {
+    let secret = plugin_stamp::secret_key_from_text(key_text).map_err(|e| format!("{SIGNING_KEY_ENV} isn't a plug-in signing key: {e}"))?;
+    let fingerprint = plugin_stamp::fingerprint(&plugin_stamp::public_key(&secret));
+    if fingerprint != expected {
+        return Err(format!("{SIGNING_KEY_ENV} is the key of {fingerprint}, but the release must be signed by {expected} ({SIGNER_ENV})"));
+    }
+    let signed = plugin_stamp::sign(stamped, &secret, &plugin_stamp::Limits::default()).map_err(|e| format!("signing failed: {e}"))?;
+    verify_signed(&signed, expected)?;
+    Ok(signed)
+}
+
+/// The module is stamped (its section is what `lcc_manifest` returns) and signed, validly, by `expected`.
+/// Returns the signer's fingerprint.
+fn verify_signed(wasm: &[u8], expected: &str) -> Result<String> {
+    plugin_stamp::check(wasm, &plugin_stamp::Limits::default()).map_err(|e| e.to_string())?;
+    match plugin_stamp::signature(wasm).map_err(|e| e.to_string())? {
+        plugin_stamp::Signature::Valid { key } => {
+            let fingerprint = plugin_stamp::fingerprint(&key);
+            if fingerprint == expected { Ok(fingerprint) } else { Err(format!("it is signed by {fingerprint}, not by the expected {expected}")) }
+        }
+        plugin_stamp::Signature::None => Err("it isn't signed".into()),
+        plugin_stamp::Signature::Invalid(why) => Err(format!("its signature is invalid: {why}")),
+    }
+}
+
+/// What a release publishes: the stamped module, signed when there is a key, and the SHA-256 of exactly
+/// those bytes. The checksum comes last because signing changes the file.
+fn release_bytes(stamped: Vec<u8>, signing: Option<(&str, &str)>) -> Result<(Vec<u8>, String)> {
+    let bytes = match signing {
+        Some((key_text, expected)) => sign_stamped(&stamped, key_text, expected)?,
+        None => stamped,
+    };
+    let sha = sha256_hex(&bytes);
+    Ok((bytes, sha))
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn release(root: &Path, tag: &str, out: &Path) -> Result<()> {
+fn release(root: &Path, tag: &str, out: &Path, sign: bool) -> Result<()> {
     let (name, version) = parse_tag(tag)?;
     let p = find_plugin(root, name)?;
     let problems = layout_problems(&p);
@@ -505,7 +559,20 @@ fn release(root: &Path, tag: &str, out: &Path) -> Result<()> {
     let id = &manifest.id;
     check_id_against_index_file(&root.join("index.json"), name, id)?;
     let file = format!("{name}-{version}.wasm");
-    let sha = sha256_hex(&bytes);
+    let (key, expected) = (env::var(SIGNING_KEY_ENV).ok(), env::var(SIGNER_ENV).ok());
+    let signing = if sign {
+        let key = key.as_deref().ok_or_else(|| format!("release --sign needs {SIGNING_KEY_ENV} (the key file's text) in the environment"))?;
+        let expected =
+            expected.as_deref().ok_or_else(|| format!("release --sign needs {SIGNER_ENV} (the signer's fingerprint) in the environment"))?;
+        Some((key, expected))
+    } else {
+        None
+    };
+    let (bytes, sha) = release_bytes(bytes, signing).map_err(|e| format!("plugins/{name}: {e}"))?;
+    // The last look, at the exact bytes about to be written: anything that touched the file after signing shows here.
+    if let Some((_, expected)) = signing {
+        verify_signed(&bytes, expected).map_err(|e| format!("plugins/{name}: the file to publish: {e}"))?;
+    }
     let title = format!("{} plug-in {version}", p.display_name.as_deref().unwrap_or(name));
 
     fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
@@ -520,7 +587,8 @@ fn release(root: &Path, tag: &str, out: &Path) -> Result<()> {
     }
     write("release.json", format!("{record:#}\n").as_bytes())?;
 
-    eprintln!("{title}: {} ({} bytes, sha256 {sha})", out.join(&file).display(), bytes.len());
+    let signed = if sign { "signed" } else { "NOT signed (no --sign)" };
+    eprintln!("{title}: {} ({} bytes, {signed}, sha256 {sha})", out.join(&file).display(), bytes.len());
     if let Some(gh) = env::var_os("GITHUB_OUTPUT") {
         let lines = format!("title={title}\nfile={file}\n");
         let mut text = fs::read_to_string(&gh).unwrap_or_default();
@@ -910,6 +978,95 @@ mod tests {
         assert!(check_id_against_index_file(&file, "x", "a").unwrap_err().contains("lists b"));
         fs::write(&file, "{ not json").unwrap();
         assert!(check_id_against_index_file(&file, "x", "a").unwrap_err().contains("index.json"), "a damaged index is an error");
+    }
+
+    const MANIFEST: &str = r#"{"id":"io.example.x","version":"1.0.0"}"#;
+
+    /// A signing key (the key file's text) and its fingerprint.
+    fn key(seed: u8) -> (String, String) {
+        let secret = [seed; 32];
+        (plugin_stamp::secret_key_text(&secret), plugin_stamp::fingerprint(&plugin_stamp::public_key(&secret)))
+    }
+
+    #[test]
+    fn a_signed_release_is_stamped_valid_and_checksummed_after_signing() {
+        let stamped = stamped(MANIFEST);
+        let (text, fingerprint) = key(7);
+        let (bytes, sha) = release_bytes(stamped.clone(), Some((&text, &fingerprint))).unwrap();
+        assert_ne!(bytes, stamped, "signing adds the signature section");
+        assert_eq!(sha, sha256_hex(&bytes), "the checksum is of the signed file, not of the stamped one");
+        assert_ne!(sha, sha256_hex(&stamped));
+        assert_eq!(verify_signed(&bytes, &fingerprint).unwrap(), fingerprint);
+        assert!(check_manifest(&plugin_at("1.0.0"), &bytes).is_ok(), "the manifest section is still read and equal to lcc_manifest");
+        assert_eq!(release_bytes(stamped, Some((&text, &fingerprint))).unwrap().0, bytes, "the same input gives the same file");
+    }
+
+    #[test]
+    fn without_a_key_the_release_is_the_stamped_file() {
+        let stamped = stamped(MANIFEST);
+        let (bytes, sha) = release_bytes(stamped.clone(), None).unwrap();
+        assert_eq!((&bytes, sha), (&stamped, sha256_hex(&stamped)));
+        assert!(verify_signed(&bytes, "0000 0000 0000 0000").unwrap_err().contains("isn't signed"));
+    }
+
+    #[test]
+    fn a_key_that_is_not_the_expected_signers_signs_nothing() {
+        let (text, fingerprint) = key(7);
+        let (_, other) = key(8);
+        let err = release_bytes(stamped(MANIFEST), Some((&text, &other))).unwrap_err();
+        assert!(err.contains(&fingerprint) && err.contains(&other) && err.contains(SIGNER_ENV), "{err}");
+    }
+
+    #[test]
+    fn a_bad_key_is_refused_without_printing_it() {
+        let (_, fingerprint) = key(7);
+        for text in ["not a key at all SECRETWORD", "photo-plugin-secret-key:SECRETWORD!!", "photo-plugin-secret-key:c2hvcnQ="] {
+            let err = release_bytes(stamped(MANIFEST), Some((text, &fingerprint))).unwrap_err();
+            assert!(err.contains(SIGNING_KEY_ENV) && !err.contains("SECRETWORD") && !err.contains("c2hvcnQ"), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_file_signed_by_someone_else_or_damaged_afterwards_is_refused() {
+        let (text, fingerprint) = key(7);
+        let (_, other) = key(8);
+        let (signed, _) = release_bytes(stamped(MANIFEST), Some((&text, &fingerprint))).unwrap();
+        assert!(verify_signed(&signed, &other).unwrap_err().contains("not by the expected"));
+        let mut damaged = signed.clone();
+        let at = damaged.iter().rposition(|b| *b == b'"').unwrap() - 3;
+        damaged[at] ^= 1; // inside the signature text
+        assert!(verify_signed(&damaged, &fingerprint).unwrap_err().contains("its signature is invalid"));
+        // a module that is still stamped and well-formed, with one more section before the signature: the signature
+        // covers every byte before it, so it no longer holds
+        let stamped_len = stamped(MANIFEST).len();
+        let mut extra = signed[..stamped_len].to_vec();
+        extra.extend_from_slice(&[0, 4, 3, b'p', b'a', b'd']);
+        extra.extend_from_slice(&signed[stamped_len..]);
+        assert!(verify_signed(&extra, &fingerprint).unwrap_err().contains("its signature is invalid"), "a change before the signature section");
+    }
+
+    #[test]
+    fn stamping_a_signed_file_drops_the_signature_so_signing_comes_last() {
+        let (text, fingerprint) = key(7);
+        let (signed, _) = release_bytes(stamped(MANIFEST), Some((&text, &fingerprint))).unwrap();
+        let restamped = plugin_stamp::stamp(&signed, &plugin_stamp::Limits::default()).unwrap();
+        assert!(verify_signed(&restamped, &fingerprint).unwrap_err().contains("isn't signed"), "release must never stamp after signing");
+        assert_eq!(restamped, stamped(MANIFEST), "stamping the published file gives back the stamped one, for a rebuilder to compare");
+    }
+
+    #[test]
+    fn every_cargo_xtask_starts_goes_through_the_one_constructor() {
+        let source = fs::read_to_string(root().join("xtask/src/main.rs")).unwrap();
+        let code = source.split("#[cfg(test)]").next().unwrap();
+        assert_eq!(code.matches("Command::new(").count(), 1, "a second process start would skip `cargo_command` and keep the signing key");
+    }
+
+    #[test]
+    fn cargo_never_gets_the_signing_key() {
+        let cmd = cargo_command(Path::new("."), &["build".to_string()], &[("A", "b".to_string())]);
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert!(envs.contains(&(std::ffi::OsStr::new(SIGNING_KEY_ENV), None)), "the key is removed from cargo's environment: {envs:?}");
+        assert!(envs.iter().any(|(k, v)| *k == "A" && v.is_some()), "other variables still pass");
     }
 
     #[test]

@@ -51,6 +51,32 @@ The build then reads `id` and `version` back from the section and checks them ag
 `id` that differs from the one `index.json` already lists for that plug-in (an app treats a changed `id` as a
 different plug-in, and its grants are lost); a first release, or an entry with no `id`, has nothing to compare.
 
+## Signing
+
+A release is signed by its author, so Chromaforge can tell who made a plug-in and that an update comes from the
+same author as the version installed. The signature is a `photo-plugin.signature` custom section inside the `.wasm`
+(the last section, written by `plugin-stamp`'s `sign`), so a file installed by hand carries it too and the release has
+no separate signature file. `cargo xtask release <tag> --sign` does it, in this order: build, stamp, check the
+manifest, **sign**, and only then checksum (`.sha256`, `release.json`, the `index.json` entry): signing changes the
+bytes, so the published file and every checksum of it are the signed one. Nothing stamps a file after it is signed
+(stamping drops the signature).
+
+- **The key** is an ed25519 key made once with Chromaforge's `plugin-stamp keygen <file>`, which prints the public
+  key's fingerprint (four groups of four hex digits). Its text goes into the repository secret `PLUGIN_SIGNING_KEY`
+  and the fingerprint into the repository variable `PLUGIN_SIGNER`. The key never goes into the repository. Only the
+  release workflow's build step gets it, on a tag push (pull requests never do), and `xtask` removes it from the
+  environment of every `cargo` it starts, so no build script sees it. It is never printed.
+- **The expected signer.** `--sign` refuses to sign unless the key belongs to `PLUGIN_SIGNER`, and checks the signed
+  file as the app will (stamp intact, signature valid, signer as expected) before anything is written;
+  `cargo xtask verify <file>` runs the same check on a file, and the workflow runs it again on the file it publishes.
+  Without `--sign` (a local `cargo xtask release <tag>` into `dist/`) the file is stamped but unsigned, and says so.
+- **A lost or replaced key** isn't recovered by a protocol: the next version is installed by hand, and Chromaforge
+  asks about the new signer. Keep the key's backup out of the repository.
+- **Rebuilding a release** to compare it with the published file: a rebuilder can't make the signature without the
+  key, so stamp the published file again with `plugin-stamp` (stamping drops the signature and leaves the stamped
+  file) and compare that with your own build of the tag. The signature itself is deterministic: the same key signs
+  the same bytes to the same section.
+
 ## Versions
 
 Each plug-in has its own version, in its `Cargo.toml`. Its manifest reads it with `env!("CARGO_PKG_VERSION")`,
@@ -68,15 +94,16 @@ A tag `<name>-v<version>` releases that plug-in alone:
 3. The release workflow (`.github/workflows/release.yml`) runs `cargo xtask release <tag>`. That checks the
    tag is on `main`, that `plugins/<name>` exists, and that its version and changelog section match the tag.
    Then it builds only that plug-in for `wasm32-unknown-unknown` and publishes a release titled
-   "<Display name> plug-in <version>". The release holds `<name>-<version>.wasm`, a `.sha256` and the changelog
-   section as notes. Finally the workflow updates the plug-in's entry in `index.json` on `main`.
+   "<Display name> plug-in <version>". The release holds the signed `<name>-<version>.wasm` (see Signing), a `.sha256` of
+   it and the changelog section as notes. Finally the workflow updates the plug-in's entry in `index.json` on `main`.
    Other plug-ins aren't touched.
 
 Before tagging, `cargo xtask release <tag>` builds the release into `dist/` locally, without publishing.
 
 Release builds are reproducible: the toolchain is pinned (`rust-toolchain.toml`, bumped on purpose) and
 `xtask` maps build paths to `/cargo` and `/src`. So a tag built anywhere with that toolchain matches the
-published `.sha256`. Stamping is deterministic, so the stamped file is reproducible too.
+published stamped file. Stamping is deterministic, so the stamped file is reproducible too; the published file and
+its `.sha256` are of that file plus the author's signature, which a rebuild compares after taking it off (see Signing).
 
 ### Finding the newest release
 

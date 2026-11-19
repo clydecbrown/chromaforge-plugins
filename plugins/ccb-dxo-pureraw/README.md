@@ -11,6 +11,15 @@ Releases: [`ccb-dxo-pureraw` releases](https://github.com/clydecbrown/chromaforg
 It needs Chromaforge v26.44.2 or later (plug-in programs, settings and `library.add`); an older Chromaforge refuses to
 install it.
 
+## Updates
+
+The plug-in names its update feed, [`index.json`](https://raw.githubusercontent.com/clydecbrown/chromaforge-plugins/index/index.json)
+on this repository's `index` branch. Chromaforge checks it only when you turn checks on: **File ▸ Plug-ins ▸ Plug-in
+Manager…**, select this plug-in, then **Check for updates** (off by default). That needs a Chromaforge with plug-in
+update checks, and a plug-in installed from a signed release: a file installed by hand without the signature gets no
+checks. An older Chromaforge ignores the feed and still runs the plug-in; update it by installing the new release by
+hand.
+
 ## Use
 
 1. Select raw photos in the Library.

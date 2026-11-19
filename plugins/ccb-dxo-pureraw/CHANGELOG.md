@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.0] - unreleased
+## [0.2.0] - 2026-11-19
 
 First public release, for macOS only. **File ▸ Plug-ins ▸ ccb: Edit in DxO PureRAW ▸ Send Selected Photos** sends raw
 photos to DxO PureRAW, and adds each DNG it makes to the library.

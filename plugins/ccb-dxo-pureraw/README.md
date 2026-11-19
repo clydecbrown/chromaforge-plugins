@@ -125,3 +125,11 @@ It asks for no network access and no other folders.
 
 **When an update asks for DxO PureRAW again:** **File ▸ Plug-ins ▸ Plug-in Manager…**, select this plug-in,
 **Permissions**, **Allow** on *Start the program DxO PureRAW*. Until you do, Send Selected Photos says to allow it.
+
+## Reporting a problem
+
+Open a [bug report](https://github.com/clydecbrown/chromaforge-plugins/issues/new?template=bug.yml): the plug-in's version
+(Plug-in Manager), Chromaforge's version (About), your macOS, what you did, and the plug-in's log lines from that send
+(Plug-in Manager ▸ Log). To report how a PureRAW version went, use the
+[PureRAW version report](https://github.com/clydecbrown/chromaforge-plugins/issues/new?template=pureraw-version-report.yml)
+instead. Don't attach PureRAW's own logs: they hold your licence details.

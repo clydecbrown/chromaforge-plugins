@@ -1,0 +1,41 @@
+name: PureRAW version report
+description: How a version of DxO PureRAW or macOS worked with ccb-dxo-pureraw
+labels: [ccb-dxo-pureraw]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The plug-in treats DxO PureRAW 2 and 3 as tested and 4 to 9 as experimental. A report from a machine that has
+        another version helps move it to tested. The steps are in
+        [`kits/pureraw`](https://github.com/clydecbrown/chromaforge-plugins/tree/main/kits/pureraw), and a plain
+        "it worked" or "it didn't" with the plug-in's log lines is useful too. Never attach PureRAW's own logs: they hold
+        your licence details.
+  - type: input
+    id: pureraw
+    attributes:
+      label: DxO PureRAW version
+      description: PureRAW ▸ About.
+      placeholder: "PureRAW 6.1"
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: The plug-in's version (Plug-in Manager), Chromaforge's version (About) and your macOS.
+      placeholder: "plug-in 0.2.0, Chromaforge 26.47.1, macOS 15.1"
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened
+      description: Which cases you ran (processed, cancelled, closed without processing) and what each did. Paste the test kit's REPORT.md if you ran it.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Plug-in log
+      description: Plug-in Manager ▸ Log, for that send. Remove anything private first.
+      render: text

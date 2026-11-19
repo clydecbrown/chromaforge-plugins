@@ -17,9 +17,15 @@ body:
     attributes:
       label: Versions
       description: The plug-in's version (Plug-in Manager), Chromaforge's version (About) and your OS.
-      placeholder: "plug-in 0.1.0, Chromaforge 26.43.6, macOS 14.6"
+      placeholder: "plug-in 0.2.0, Chromaforge 26.47.1, macOS 15.1"
     validations:
       required: true
+  - type: input
+    id: pureraw
+    attributes:
+      label: DxO PureRAW version
+      description: PureRAW ▸ About. Leave it empty when DxO PureRAW isn't involved.
+      placeholder: "PureRAW 3.7"
   - type: textarea
     id: what
     attributes:

@@ -90,10 +90,11 @@ may have several. Send Selected Photos looks for the ones below that are install
 - **A version becomes tested** once its handoff has been watched in three runs (processed, cancelled during
   processing, and closed without processing) and the stand-in that CI runs the round trip against
   (`tools/fake-pureraw`) does what that version does.
-- **To report how a version went**, open an issue at
-  [chromaforge-plugins](https://github.com/clydecbrown/chromaforge-plugins/issues) with the label `ccb-dxo-pureraw`:
+- **To report how a version went**, open a
+  [PureRAW version report](https://github.com/clydecbrown/chromaforge-plugins/issues/new?template=pureraw-version-report.yml):
   the PureRAW version (PureRAW ▸ About), what you did, and the plug-in's log lines from that send (Plug-in
-  Manager ▸ Log). Don't attach PureRAW's own logs: they hold your licence details.
+  Manager ▸ Log). For a full check, [the test kit](../../kits/pureraw/README.md) has the steps and a report to paste.
+  Don't attach PureRAW's own logs: they hold your licence details.
 - PureRAW 10 and later aren't declared, so Chromaforge can't let the plug-in start them; they need a plug-in update.
 
 ## Permissions

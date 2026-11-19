@@ -12,11 +12,11 @@ publish = false
 
 [workspace.dependencies]
 # Chromaforge's guest SDK (ABI v1, docs/plugins.md there). Pinned: bump the rev on purpose, after
-# reading what changed in sdk/plugin. Now the merge of PR #1273 (plug-in signatures) on main: moves to the release tag that has it
-# when there is one.
-lcc-plugin-sdk = { git = "https://github.com/emmertex/chromaforge", rev = "9bbde637e90cdc00fe679ba658f09d5eb1006d86" }
+# reading what changed in sdk/plugin. Now the commit Chromaforge v26.47.2 was built from (plug-in signatures and the
+# update feed): moves to the next release's commit, not to a `main` commit.
+lcc-plugin-sdk = { git = "https://github.com/emmertex/chromaforge", rev = "e5ffd32be6839e407c285eadd2501cea15ecc08d" }
 # The stamp tool (sdk/stamp): the same repository and rev as the SDK, so the two never drift apart.
-plugin-stamp = { git = "https://github.com/emmertex/chromaforge", rev = "9bbde637e90cdc00fe679ba658f09d5eb1006d86" }
+plugin-stamp = { git = "https://github.com/emmertex/chromaforge", rev = "e5ffd32be6839e407c285eadd2501cea15ecc08d" }
 handoff = { path = "crates/handoff" }
 serde_json = "1"
 

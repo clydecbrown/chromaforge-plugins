@@ -20,6 +20,11 @@ later (the first to check plug-in signatures and offer updates), and a plug-in i
 installed by hand without the signature gets no checks. An older Chromaforge ignores the feed and still runs the
 plug-in; update it by installing the new release by hand.
 
+An update started from the Plug-in Manager keeps the permissions you allowed, DxO PureRAW included. One that adds a
+version of PureRAW to the list below asks for it again, as does one installed by a command (the control channel or the
+command line) with different code: the program is no longer allowed, and the plug-in's log says why. Allow it
+again as at install (see [Permissions](#permissions)).
+
 ## Use
 
 1. Select raw photos in the Library.
@@ -117,3 +122,6 @@ Chromaforge shows each one unticked when you install the plug-in. It needs all t
 | **Start the program DxO PureRAW** (`programs`, bundle ids `com.dxo-labs.PureRawv9.standalone` down to `com.dxo-labs.PureRawv2.standalone`) | To open the PureRAW you choose with the photos you send. The plug-in passes it the list of files and the arguments its plug-in mode takes, nothing else. Each bundle id is one version of PureRAW. |
 
 It asks for no network access and no other folders.
+
+**When an update asks for DxO PureRAW again:** **File ▸ Plug-ins ▸ Plug-in Manager…**, select this plug-in,
+**Permissions**, **Allow** on *Start the program DxO PureRAW*. Until you do, Send Selected Photos says to allow it.

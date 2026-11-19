@@ -251,6 +251,9 @@ fn layout_problems(p: &Plugin) -> Vec<String> {
     if !valid_prefix(&p.dir) {
         problems.push(format!("plugins/{}: folder names are lowercase letters, digits and '-', not starting or ending with '-'", p.dir));
     }
+    if p.dir == "format" {
+        problems.push("plugins/format: the name is the index's own key (`format`), so no plug-in's entry can have it".to_string());
+    }
     if p.cdylib.is_none() {
         problems.push(format!("plugins/{}: [lib] crate-type needs \"cdylib\"", p.dir));
     }
@@ -381,7 +384,7 @@ fn check_manifest(p: &Plugin, wasm: &[u8]) -> Result<ManifestIds> {
 /// `index.json` already lists for it would be a different plug-in, and would lose the grants. An entry
 /// with no `id` (or no entry: a first release) has nothing to compare.
 fn check_id_against_index(index: &Value, plugin: &str, id: &str) -> Result<()> {
-    match &index["plugins"][plugin]["id"] {
+    match &index[plugin]["id"] {
         Value::Null => Ok(()),
         Value::String(listed) if listed == id => Ok(()),
         Value::String(listed) => Err(format!(
@@ -605,7 +608,8 @@ fn release(root: &Path, tag: &str, out: &Path, index: &Path, sign: bool) -> Resu
     Ok(())
 }
 
-/// Puts one release into the index: `{"format": 1, "plugins": {<name>: {…}}}`, keyed and sorted by
+/// Puts one release into the index: `{"format": 1, "<name>": {…}}`, the entries at the top level as the host's
+/// update feed reads them (it takes the object whose `id` is the plug-in's, under any key), keyed and sorted by
 /// plug-in, so each plug-in has exactly one current entry.
 fn update_index(index: &mut Value, record: &Value, repo: &str) -> Result<()> {
     let field = |k: &str| record[k].as_str().ok_or_else(|| format!("release.json has no {k}"));
@@ -616,10 +620,13 @@ fn update_index(index: &mut Value, record: &Value, repo: &str) -> Result<()> {
         v @ Value::Array(items) if items.iter().all(Value::is_string) => Ok(v.clone()),
         _ => Err(format!("release.json: {k} is not a list of strings")),
     };
-    if !index.is_object() {
-        *index = json!({"format": 1, "plugins": {}});
+    if plugin == "format" {
+        return Err("release.json: a plug-in can't be named format, the index's own key".into());
     }
-    let plugins = index["plugins"].as_object_mut().ok_or("index.json: plugins is not an object")?;
+    if !index.is_object() {
+        *index = json!({"format": 1});
+    }
+    let plugins = index.as_object_mut().ok_or("index.json is not an object")?;
     plugins.insert(
         plugin.to_string(),
         json!({
@@ -636,7 +643,7 @@ fn update_index(index: &mut Value, record: &Value, repo: &str) -> Result<()> {
         }),
     );
     if let Some(notes) = record["notes"].as_str().filter(|n| !n.is_empty()) {
-        plugins[plugin]["notes"] = Value::String(notes.to_string());
+        index[plugin]["notes"] = Value::String(notes.to_string());
     }
     Ok(())
 }
@@ -695,10 +702,11 @@ mod tests {
         update_index(&mut index, &rec("other", "1.0.0"), "o/r").unwrap();
         update_index(&mut index, &rec("pureraw", "0.2.0"), "o/r").unwrap();
         assert_eq!(index["format"], 1);
-        assert_eq!(index["plugins"].as_object().unwrap().len(), 2);
-        assert_eq!(index["plugins"]["pureraw"]["version"], "0.2.0");
-        assert_eq!(index["plugins"]["pureraw"]["url"], "https://github.com/o/r/releases/download/pureraw-v0.2.0/pureraw-0.2.0.wasm");
-        assert_eq!(index["plugins"]["other"]["version"], "1.0.0");
+        assert_eq!(index.as_object().unwrap().len(), 3, "format and two plug-ins");
+        assert!(index.get("plugins").is_none());
+        assert_eq!(index["pureraw"]["version"], "0.2.0");
+        assert_eq!(index["pureraw"]["url"], "https://github.com/o/r/releases/download/pureraw-v0.2.0/pureraw-0.2.0.wasm");
+        assert_eq!(index["other"]["version"], "1.0.0");
     }
 
     fn full_rec(plugin: &str, v: &str) -> Value {
@@ -711,7 +719,7 @@ mod tests {
     fn an_index_entry_carries_the_manifest_fields_and_the_changelog_link() {
         let mut index = Value::Null;
         update_index(&mut index, &full_rec("pureraw", "0.2.0"), "o/r").unwrap();
-        let e = &index["plugins"]["pureraw"];
+        let e = &index["pureraw"];
         assert_eq!(index["format"], 1);
         assert_eq!(e["id"], "io.example.pureraw");
         assert_eq!(e["requires"], json!(["settings"]));
@@ -730,19 +738,41 @@ mod tests {
         next["permissions"] = json!(["catalog"]);
         next.as_object_mut().unwrap().remove("notes");
         update_index(&mut index, &next, "o/r").unwrap();
-        let e = &index["plugins"]["pureraw"];
+        let e = &index["pureraw"];
         assert_eq!(e["requires"], json!([]), "a requires the new version no longer has is gone");
         assert_eq!(e["permissions"], json!(["catalog"]));
         assert!(e.get("notes").is_none(), "an earlier version's notes don't stay");
     }
 
     #[test]
-    fn an_index_with_older_entries_still_takes_a_new_release() {
-        let mut index = json!({"format": 1, "plugins": {"old": {"name": "O", "version": "1.0.0", "tag": "old-v1.0.0", "url": "u", "sha256": "ab"}}});
+    fn a_plugin_named_format_is_refused() {
+        let err = update_index(&mut Value::Null, &full_rec("format", "0.1.0"), "o/r").unwrap_err();
+        assert!(err.contains("format"), "{err}");
+    }
+
+    /// The host's lookup (`read_feed`): the top-level values that are objects with this `id`.
+    fn host_finds(index: &Value, id: &str) -> usize {
+        index.as_object().unwrap().values().filter(|e| e.get("id").and_then(Value::as_str) == Some(id)).count()
+    }
+
+    #[test]
+    fn the_host_finds_exactly_one_entry_for_each_plugin() {
+        let mut index = Value::Null;
+        update_index(&mut index, &full_rec("pureraw", "0.1.0"), "o/r").unwrap();
+        update_index(&mut index, &full_rec("other", "1.0.0"), "o/r").unwrap();
         update_index(&mut index, &full_rec("pureraw", "0.2.0"), "o/r").unwrap();
-        assert_eq!(index["plugins"]["old"]["version"], "1.0.0");
-        assert!(index["plugins"]["old"].get("id").is_none(), "the older entry is left as it was");
-        assert_eq!(index["plugins"].as_object().unwrap().len(), 2);
+        assert_eq!(host_finds(&index, "io.example.pureraw"), 1);
+        assert_eq!(host_finds(&index, "io.example.other"), 1);
+        let old_shape = json!({"format": 1, "plugins": {"pureraw": {"id": "io.example.pureraw"}}});
+        assert_eq!(host_finds(&old_shape, "io.example.pureraw"), 0, "the old shape offers the host nothing");
+    }
+
+    #[test]
+    fn the_id_check_reads_the_top_level_and_refuses_a_changed_id() {
+        let index = json!({"format": 1, "pureraw": {"id": "io.example.pureraw"}});
+        assert!(check_id_against_index(&index, "pureraw", "io.example.pureraw").is_ok());
+        assert!(check_id_against_index(&index, "pureraw", "io.example.changed").unwrap_err().contains("changed id"));
+        assert!(check_id_against_index(&index, "other", "io.example.other").is_ok(), "a first release has nothing to compare");
     }
 
     #[test]
@@ -861,6 +891,13 @@ mod tests {
         assert!(!stamped.exists(), "neither a half-written nor an earlier file is left");
     }
 
+    #[test]
+    fn a_folder_named_format_fails_the_layout_check() {
+        let mut p = plugin_at("0.1.0");
+        p.dir = "format".into();
+        assert!(layout_problems(&p).iter().any(|m| m.contains("index's own key")), "refused before anything is built or published");
+    }
+
     fn plugin_at(version: &str) -> Plugin {
         Plugin { dir: "x".into(), package: "x".into(), version: version.into(), display_name: None, cdylib: None, path: PathBuf::new() }
     }
@@ -964,14 +1001,14 @@ mod tests {
 
     #[test]
     fn a_changed_manifest_id_is_refused_against_the_index() {
-        let index = json!({"format": 1, "plugins": {"x": {"id": "io.example.x", "version": "1.0.0"}, "y": {"version": "1.0.0"}}});
+        let index = json!({"format": 1, "x": {"id": "io.example.x", "version": "1.0.0"}, "y": {"version": "1.0.0"}});
         assert!(check_id_against_index(&index, "x", "io.example.x").is_ok());
         let err = check_id_against_index(&index, "x", "io.example.other").unwrap_err();
         assert!(err.contains("plugins/x") && err.contains("io.example.x") && err.contains("io.example.other") && err.contains("grants"), "{err}");
         assert!(check_id_against_index(&index, "y", "anything").is_ok(), "an entry with no id has nothing to compare");
         assert!(check_id_against_index(&index, "new", "anything").is_ok(), "a first release has no entry");
         assert!(check_id_against_index(&Value::Null, "x", "a").is_ok(), "no index");
-        let odd = json!({"plugins": {"x": {"id": 7}}});
+        let odd = json!({"x": {"id": 7}});
         assert!(check_id_against_index(&odd, "x", "a").unwrap_err().contains("isn't a string"));
     }
 
@@ -980,7 +1017,7 @@ mod tests {
         let dir = scratch("index-file");
         let file = dir.join("index.json");
         assert!(check_id_against_index_file(&file, "x", "a").is_ok(), "no file: a first release");
-        fs::write(&file, r#"{"format":1,"plugins":{"x":{"id":"b"}}}"#).unwrap();
+        fs::write(&file, r#"{"format":1,"x":{"id":"b"}}"#).unwrap();
         assert!(check_id_against_index_file(&file, "x", "b").is_ok());
         assert!(check_id_against_index_file(&file, "x", "a").unwrap_err().contains("lists b"));
         fs::write(&file, "{ not json").unwrap();
@@ -1002,11 +1039,11 @@ mod tests {
         let record = ws.join("release.json");
         fs::write(&record, serde_json::to_string(&full_rec("pureraw", "0.2.0")).unwrap()).unwrap();
         let target = feed.join("index.json");
-        fs::write(&target, r#"{"format":1,"plugins":{"old":{"name":"O","version":"1.0.0","tag":"old-v1.0.0","url":"u","sha256":"ab"}}}"#).unwrap();
+        fs::write(&target, r#"{"format":1,"old":{"name":"O","version":"1.0.0","tag":"old-v1.0.0","url":"u","sha256":"ab"}}"#).unwrap();
         index(&record, "o/r", &target).unwrap();
         let written: Value = serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
-        assert_eq!(written["plugins"]["pureraw"]["version"], "0.2.0", "the entry went to the given file");
-        assert_eq!(written["plugins"]["old"]["version"], "1.0.0", "the other plug-in's entry is kept");
+        assert_eq!(written["pureraw"]["version"], "0.2.0", "the entry went to the given file");
+        assert_eq!(written["old"]["version"], "1.0.0", "the other plug-in's entry is kept");
         assert_eq!(fs::read_to_string(&workspace_file).unwrap(), "untouched\n", "the workspace file is not written");
     }
 

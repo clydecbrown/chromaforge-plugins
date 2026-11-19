@@ -16,7 +16,7 @@ Several plug-ins share this repository, and each one is released on its own.
 | `tools/` | test stand-ins for the programs plug-ins talk to, so the round trip runs in CI. Every folder here is a crate (the workspace takes `tools/*`) |
 | `fixtures/` | shared test input |
 | `xtask/` | repository tasks: CI checks, release builds, `index.json` |
-| `index` branch | not in this tree: a branch holding only `index.json`, the current release of every plug-in, kept up to date by the release workflow (Releases) |
+| `index` branch | not in this tree: a branch holding only `index.json`, the current release of every plug-in, one top-level entry each: Chromaforge's update feed, kept up to date by the release workflow (Releases) |
 
 ## Building
 
@@ -95,14 +95,14 @@ A tag `<name>-v<version>` releases that plug-in alone:
    tag is on `main`, that `plugins/<name>` exists, and that its version and changelog section match the tag.
    Then it builds only that plug-in for `wasm32-unknown-unknown` and publishes a release titled
    "<Display name> plug-in <version>". The release holds the signed `<name>-<version>.wasm` (see Signing), a `.sha256` of
-   it and the changelog section as notes. Finally the workflow updates the plug-in's entry in `index.json` on the `index` branch.
+   it and the changelog section as notes. Finally the workflow updates the plug-in's entry (top level, keyed by its folder name) in `index.json` on the `index` branch, the update feed.
    Other plug-ins aren't touched.
 
 The `index` branch is made once, by hand, and a release fails (before building anything) when it is missing, so a
 mistyped name can't start a second index that drops the other plug-ins' entries:
 
 ```sh
-git switch --orphan index && echo '{"format": 1, "plugins": {}}' > index.json && git add index.json &&
+git switch --orphan index && echo '{"format": 1}' > index.json && git add index.json &&
   git commit -m "index: start" && git push origin index && git switch main
 ```
 
@@ -120,22 +120,22 @@ about five minutes, so a new release shows up after that).
 
 GitHub's "latest release" is per repository, so it points at whichever plug-in shipped last. Each plug-in's
 README links to its own releases instead (`…/releases?q=<name>-v&expanded=true`). `index.json`, on the `index` branch (so `main` takes pull requests only), lists every
-plug-in's current version, download URL and SHA-256 in one file, in the form a plug-in store could read:
+plug-in's current version, download URL and SHA-256 in one file. Chromaforge reads it as a plug-in's update feed (a plug-in names this URL as its feed): the host takes the
+top-level entry whose `id` equals the plug-in's manifest `id`, under any key, over `https` only and at most 1 MB:
 
 ```json
 {
   "format": 1,
-  "plugins": {
-    "<name>": { "name": "…", "id": "io.example.name", "version": "0.1.0", "tag": "<name>-v0.1.0",
-                "url": "…/<name>-0.1.0.wasm", "sha256": "…", "requires": ["settings"],
-                "permissions": ["catalog", "programs"], "notes": "…",
-                "changelog": "…/blob/<name>-v0.1.0/plugins/<name>/CHANGELOG.md",
-                "releases": "…/releases?q=<name>-v&expanded=true" }
-  }
+  "<name>": { "name": "…", "id": "io.example.name", "version": "0.1.0", "tag": "<name>-v0.1.0",
+              "url": "…/<name>-0.1.0.wasm", "sha256": "…", "requires": ["settings"],
+              "permissions": ["catalog", "programs"], "notes": "…",
+              "changelog": "…/blob/<name>-v0.1.0/plugins/<name>/CHANGELOG.md",
+              "releases": "…/releases?q=<name>-v&expanded=true" }
 }
 ```
 
-An app finds a plug-in's entry by `id`, the manifest's, since the key is the folder name. Everything but `notes` is
+An app finds a plug-in's entry by `id`, the manifest's, since the key is the folder name (so no plug-in is named
+`format`). Everything but `notes` is
 read from the built module, never typed by hand:
 
 - `id`, `requires` (host features, as the manifest has them) and `permissions` (the names of the permission

@@ -14,3 +14,5 @@ photos to DxO PureRAW, and adds each DNG it makes to the library.
   and the log asks you to report how they go. With none installed, Send Selected Photos says which to install.
 - Needs Chromaforge v26.44.2 or later (plug-in programs, settings and `library.add`); an older Chromaforge refuses to
   install it.
+- **Updates:** the plug-in names its update feed. Turn on Check for updates in the Plug-in Manager and new versions
+  come through it (needs a Chromaforge with plug-in update checks).

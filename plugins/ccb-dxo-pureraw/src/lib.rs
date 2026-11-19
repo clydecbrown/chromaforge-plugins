@@ -33,6 +33,7 @@ pub const MANIFEST: &str = concat!(
     r#"", "description": "Sends raw photos to DxO PureRAW and adds the DNGs it makes to the album you sent them from.",
   "author": "Clyde C Brown",
   "requires": ["programs", "libraryAdd", "settings"],
+  "updateUrl": "https://raw.githubusercontent.com/clydecbrown/chromaforge-plugins/index/index.json",
   "permissions": {
     "catalog": true,
     "libraryAdd": true,
@@ -137,6 +138,17 @@ mod tests {
             serde_json::json!([{"id": "send", "label": "Send Selected Photos", "prepare": true,
                 "dialog": [{"key": VERSION_ARG, "label": "Version", "type": "choice", "options": []}]}])
         );
+    }
+
+    #[test]
+    fn the_manifest_names_the_update_feed_without_requiring_it() {
+        let m: Value = serde_json::from_str(MANIFEST).unwrap();
+        assert_eq!(
+            m["updateUrl"], "https://raw.githubusercontent.com/clydecbrown/chromaforge-plugins/index/index.json",
+            "the index branch's index.json of this repository"
+        );
+        let requires = m["requires"].as_array().unwrap();
+        assert!(!requires.iter().any(|r| r == "updates"), "a Chromaforge without update checks must still install it");
     }
 
     #[test]

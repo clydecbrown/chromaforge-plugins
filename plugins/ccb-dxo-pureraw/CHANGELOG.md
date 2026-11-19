@@ -16,3 +16,5 @@ photos to DxO PureRAW, and adds each DNG it makes to the library.
   install it.
 - **Updates:** the plug-in names its update feed. Turn on Check for updates in the Plug-in Manager and new versions
   come through it (needs a Chromaforge with plug-in update checks).
+  An update from the Plug-in Manager keeps the permissions you allowed. One that adds a PureRAW version, or an install
+  by command with different code, asks for DxO PureRAW again: allow it in Plug-in Manager ▸ the plug-in ▸ Permissions.

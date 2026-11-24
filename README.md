@@ -72,10 +72,21 @@ bytes, so the published file and every checksum of it are the signed one. Nothin
   Without `--sign` (a local `cargo xtask release <tag>` into `dist/`) the file is stamped but unsigned, and says so.
 - **A lost or replaced key** isn't recovered by a protocol: the next version is installed by hand, and Chromaforge
   asks about the new signer. Keep the key's backup out of the repository.
-- **Rebuilding a release** to compare it with the published file: a rebuilder can't make the signature without the
-  key, so stamp the published file again with `plugin-stamp` (stamping drops the signature and leaves the stamped
-  file) and compare that with your own build of the tag. The signature itself is deterministic: the same key signs
-  the same bytes to the same section.
+- **Checking a release against its source.** A rebuilder can't make the signature without the key, so the check
+  takes it off the published file (stamping drops it) and compares the rest with a build of the tag. Two ways:
+  - On GitHub: Actions ▸ *Verify a release* ▸ Run workflow, with the tag (`ccb-dxo-pureraw-v0.2.0`). It builds the tag on
+    the runner releases are built on and compares it with the release's `.wasm`. It has no secrets and publishes nothing.
+  - By hand, on Linux x86-64: `gh release download <tag> --pattern '*.wasm' --dir published`, check out the tag, and run
+    `cargo xtask rebuild <tag> published/<name>-<version>.wasm` (it builds the working tree, so check out the tag first,
+    and only a tag made after `rebuild` was added has it). For an older tag, run `cargo xtask plugin <name>` on
+    the tag, then `cargo xtask compare <built .wasm in target/wasm32-unknown-unknown/release/stamped> <published>` from a
+    newer checkout, as the workflow does.
+  - **Not on a Mac** (or another host): the same source builds to a different file there, though equally correct. Cargo
+    mixes the compiler's host (`rustc -vV`) into each crate's hash, and rustc orders code and constants by those hashes, so
+    the code's call indexes and the order of its constants differ. Seen on `ccb-dxo-pureraw-v0.2.0`: a Mac rebuild differs, and the same
+    Mac build with the host line changed to CI's equals the published file. Two builds on one machine, in different
+    folders, are identical (a test checks that).
+  The signature itself is deterministic: the same key signs the same bytes to the same section.
 
 ## Versions
 
@@ -108,10 +119,12 @@ git switch --orphan index && echo '{"format": 1}' > index.json && git add index.
 
 Before tagging, `cargo xtask release <tag>` builds the release into `dist/` locally (checking the manifest `id` against `index.json` in the workspace if there is one, or `--index <file>`), without publishing.
 
-Release builds are reproducible: the toolchain is pinned (`rust-toolchain.toml`, bumped on purpose) and
-`xtask` maps build paths to `/cargo` and `/src`. So a tag built anywhere with that toolchain matches the
-published stamped file. Stamping is deterministic, so the stamped file is reproducible too; the published file and
-its `.sha256` are of that file plus the author's signature, which a rebuild compares after taking it off (see Signing).
+Release builds are reproducible on one kind of machine: the toolchain is pinned (`rust-toolchain.toml`, bumped on
+purpose) and `xtask` maps build paths to `/cargo` and `/src`, so a tag built anywhere on the same host (Linux x86-64,
+where releases are built) matches the published stamped file, in any folder. Another host gives other bytes (see
+Signing, *Checking a release against its source*). Stamping is deterministic, so the stamped file is reproducible too;
+the published file and its `.sha256` are of that file plus the author's signature, which a check compares after taking it
+off.
 
 ### Finding the newest release
 

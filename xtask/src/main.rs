@@ -9,6 +9,11 @@
 //!   that plug-in only, and writes `<name>-<version>.wasm`, its `.sha256`, `notes.md` (the changelog
 //!   section) and `release.json` to `<dir>` (default `dist`). `--index` is the index file the manifest `id` is
 //!   checked against (default `index.json` in the workspace).
+//! - `rebuild <tag> <published.wasm>`: builds that tag's plug-in as `release` does and checks it against a published file with the
+//!   signature section taken out. Equal only on the same host as CI's (Linux x86-64): cargo hashes the compiler's host into the
+//!   code's layout.
+//! - `compare <rebuilt.wasm> <published.wasm>`: the comparison of `rebuild` alone, for a rebuild made by an older tag's own
+//!   `xtask plugin`.
 //! - `index <release.json> --repo <owner/name> [--file <path>]`: puts that release into the index file (default `index.json` in the workspace).
 //!
 //! `CHROMAFORGE_SDK=<Chromaforge checkout>` builds against that checkout's `sdk/plugin` instead of the pinned
@@ -78,6 +83,17 @@ fn run(args: &[String]) -> Result<()> {
             let index = index_path(&root, rest, "--index");
             release(&root, tag, &out, &index, rest.iter().any(|a| a == "--sign"))
         }
+        Some("rebuild") => {
+            let [tag, file] = rest else { return Err("usage: rebuild <tag> <published.wasm>".into()) };
+            rebuild(&root, tag, Path::new(file))
+        }
+        Some("compare") => {
+            let [rebuilt, published] = rest else { return Err("usage: compare <rebuilt.wasm> <published.wasm>".into()) };
+            let read = |f: &String| fs::read(f).map_err(|e| format!("{f}: {e}"));
+            compare_rebuild(&read(rebuilt)?, &read(published)?).map_err(|e| format!("{published}: {e}"))?;
+            eprintln!("{rebuilt} equals {published} without its signature");
+            Ok(())
+        }
         Some("verify") => {
             let [file] = rest else { return Err("usage: verify <plug-in.wasm>".into()) };
             let bytes = fs::read(file).map_err(|e| format!("{file}: {e}"))?;
@@ -93,7 +109,7 @@ fn run(args: &[String]) -> Result<()> {
             let file = index_path(&root, rest, "--file");
             index(Path::new(record), &repo, &file)
         }
-        _ => Err("usage: cargo xtask <ci | check | plugins | plugin <name> | release <tag> [--sign] | verify <file> | index <release.json>>".into()),
+        _ => Err("usage: cargo xtask <ci | check | plugins | plugin <name> | release <tag> [--sign] | rebuild <tag> <file> | compare <rebuilt> <published> | verify <file> | index <release.json>>".into()),
     }
 }
 
@@ -281,19 +297,24 @@ fn plugin(root: &Path, p: &Plugin) -> Result<()> {
 /// `lcc_manifest` returns) and returns the copy's path: the file to check, checksum and publish.
 ///
 /// Dependencies' panic locations hold their source paths, which sit under Cargo's home folder: mapped to `/cargo` (and the workspace to `/src`), so the file doesn't carry a
-/// user's home folder and the same commit builds to the same bytes on any machine with the same toolchain.
+/// user's home folder and the same commit builds to the same bytes on any machine with the same toolchain and host (cargo hashes the host into the code's layout).
 fn build_wasm(root: &Path, p: &Plugin) -> Result<PathBuf> {
+    let target_dir = env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
+    build_wasm_with(root, p, &target_dir, true)
+}
+
+/// `build_wasm` into `target_dir`; `remap` false leaves the paths in (only the test of what the remaps are for).
+fn build_wasm_with(root: &Path, p: &Plugin, target_dir: &Path, remap: bool) -> Result<PathBuf> {
     let cargo_home = env::var_os("CARGO_HOME")
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|h| Path::new(&h).join(".cargo")))
         .ok_or("neither CARGO_HOME nor HOME is set")?;
     let flags = [format!("--remap-path-prefix={}=/cargo", cargo_home.display()), format!("--remap-path-prefix={}=/src", root.display())];
-    cargo_with(
-        root,
-        &["build", "-p", &p.package, "--lib", "--release", "--target", WASM_TARGET, "--locked"],
-        &[("CARGO_ENCODED_RUSTFLAGS", flags.join("\x1f"))],
-    )?;
-    let target_dir = env::var_os("CARGO_TARGET_DIR").map_or_else(|| root.join("target"), PathBuf::from);
+    let mut envs = vec![("CARGO_TARGET_DIR", target_dir.display().to_string())];
+    if remap {
+        envs.push(("CARGO_ENCODED_RUSTFLAGS", flags.join("\x1f")));
+    }
+    cargo_with(root, &["build", "-p", &p.package, "--lib", "--release", "--target", WASM_TARGET, "--locked"], &envs)?;
     let wasm = target_dir.join(WASM_TARGET).join("release").join(format!("{}.wasm", p.cdylib.as_deref().unwrap_or(&p.package)));
     if !wasm.is_file() {
         return Err(format!("{} was not built", wasm.display()));
@@ -606,6 +627,37 @@ fn release(root: &Path, tag: &str, out: &Path, index: &Path, sign: bool) -> Resu
         fs::write(&gh, text).map_err(|e| format!("GITHUB_OUTPUT: {e}"))?;
     }
     Ok(())
+}
+
+/// Builds `tag`'s plug-in as `release` does and compares it with `published`, a release's `.wasm`.
+fn rebuild(root: &Path, tag: &str, published: &Path) -> Result<()> {
+    let (name, version) = parse_tag(tag)?;
+    let p = find_plugin(root, name)?;
+    if p.version != version {
+        return Err(format!("tag {tag} says {version}, but plugins/{name}/Cargo.toml says {}", p.version));
+    }
+    let built = build_wasm(root, &p)?;
+    let rebuilt = fs::read(&built).map_err(|e| format!("{}: {e}", built.display()))?;
+    let theirs = fs::read(published).map_err(|e| format!("{}: {e}", published.display()))?;
+    compare_rebuild(&rebuilt, &theirs).map_err(|e| format!("plugins/{name}: {}: {e}", published.display()))?;
+    eprintln!("{tag}: the rebuild equals {} without its signature (sha256 {})", published.display(), sha256_hex(&rebuilt));
+    Ok(())
+}
+
+/// `rebuilt` (stamped, unsigned) against `published`: the same bytes once the published file's signature section is
+/// taken out (stamping drops it). Says where the first difference is, and the usual reason.
+fn compare_rebuild(rebuilt: &[u8], published: &[u8]) -> Result<()> {
+    let unsigned = plugin_stamp::stamp(published, &plugin_stamp::Limits::default()).map_err(|e| format!("not a stamped plug-in: {e}"))?;
+    if unsigned == rebuilt {
+        return Ok(());
+    }
+    let at = unsigned.iter().zip(rebuilt).position(|(a, b)| a != b).unwrap_or_else(|| unsigned.len().min(rebuilt.len()));
+    Err(format!(
+        "the rebuild differs ({} bytes against {}, first difference at byte {at}). The same source gives other bytes on another \
+         host (`rustc -vV`'s host line): compare on Linux x86-64, which is where releases are built",
+        rebuilt.len(),
+        unsigned.len()
+    ))
 }
 
 /// Puts one release into the index: `{"format": 1, "<name>": {…}}`, the entries at the top level as the host's
@@ -1134,6 +1186,56 @@ mod tests {
         let envs: Vec<_> = cmd.get_envs().collect();
         assert!(envs.contains(&(std::ffi::OsStr::new(SIGNING_KEY_ENV), None)), "the key is removed from cargo's environment: {envs:?}");
         assert!(envs.iter().any(|(k, v)| *k == "A" && v.is_some()), "other variables still pass");
+    }
+
+    #[test]
+    fn a_rebuild_equals_the_published_file_without_its_signature() {
+        let (text, fingerprint) = key(7);
+        let (signed, _) = release_bytes(stamped(MANIFEST), Some((&text, &fingerprint))).unwrap();
+        compare_rebuild(&stamped(MANIFEST), &signed).unwrap();
+        let mut other = stamped(MANIFEST);
+        let last = other.len() - 1;
+        other[last] ^= 1;
+        let err = compare_rebuild(&other, &signed).unwrap_err();
+        assert!(err.contains("the rebuild differs") && err.contains("first difference at byte"), "{err}");
+        assert!(err.contains("host"), "it names the usual reason: {err}");
+        assert!(compare_rebuild(&stamped(MANIFEST), b"not wasm").unwrap_err().contains("not a stamped plug-in"));
+    }
+
+    /// Copies the workspace's sources (not `target`, `.git` or `dist`) into `to`.
+    fn copy_workspace(from: &Path, to: &Path) {
+        fs::create_dir_all(to).unwrap();
+        for entry in fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name();
+            if ["target", ".git", "dist"].iter().any(|skip| name == *skip) {
+                continue;
+            }
+            let dest = to.join(&name);
+            if entry.file_type().unwrap().is_dir() {
+                copy_workspace(&entry.path(), &dest);
+            } else {
+                fs::copy(entry.path(), dest).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn one_commit_built_in_two_folders_gives_the_same_stamped_file() {
+        let base = scratch("two-folders").canonicalize().unwrap(); // cargo reports real paths
+        let built: Vec<Vec<u8>> = ["first-checkout", "a-second-checkout-with-a-longer-name"]
+            .iter()
+            .map(|name| {
+                let copy = base.join(name);
+                copy_workspace(&root(), &copy);
+                let p = find_plugin(&copy, "ccb-dxo-pureraw").unwrap();
+                let stamped = build_wasm_with(&copy, &p, &copy.join("target"), true).unwrap();
+                fs::read(stamped).unwrap()
+            })
+            .collect();
+        let same = built[0] == built[1];
+        let _ = fs::remove_dir_all(&base); // two builds' worth of target dirs
+        assert!(same, "the stamped file depends on the folder it was built in: a path got into the code or data");
     }
 
     #[test]

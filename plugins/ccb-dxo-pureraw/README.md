@@ -130,6 +130,7 @@ It asks for no network access and no other folders.
 
 Open a [bug report](https://github.com/clydecbrown/chromaforge-plugins/issues/new?template=bug.yml): the plug-in's version
 (Plug-in Manager), Chromaforge's version (About), your macOS, what you did, and the plug-in's log lines from that send
-(Plug-in Manager ▸ Log). To report how a PureRAW version went, use the
+(Plug-in Manager ▸ Log). Every reply the plug-in gives you is also in the log, in the same words, so you can copy
+them from there after the message has gone. (Chromaforge can ask the plug-in twice before a send, so a refusal can appear twice.) To report how a PureRAW version went, use the
 [PureRAW version report](https://github.com/clydecbrown/chromaforge-plugins/issues/new?template=pureraw-version-report.yml)
 instead. Don't attach PureRAW's own logs: they hold your licence details.

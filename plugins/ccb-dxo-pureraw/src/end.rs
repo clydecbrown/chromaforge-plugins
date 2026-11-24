@@ -21,7 +21,7 @@ const MAX_DETAIL: usize = 50;
 /// How many files a summary names before "and N more".
 const MAX_NAMED: usize = 10;
 /// The host cuts a log line off at 2048 bytes: lines are kept below that, cut at a character.
-const MAX_LINE: usize = 2000;
+pub(crate) const MAX_LINE: usize = 2000;
 /// The most results one run reads: an add per photo sent, and as many to spare.
 const MAX_RESULTS: usize = MAX_PHOTOS * 2;
 /// The version a run without a version file ran: one sent by 0.1.0, which knew only PureRAW 3.
@@ -269,10 +269,15 @@ fn exists(host: &mut impl Host, path: &str) -> bool {
 
 /// `line`, cut at a character to fit the host's log line.
 fn fit(line: &str) -> &str {
-    if line.len() <= MAX_LINE {
+    fit_to(line, MAX_LINE)
+}
+
+/// `line`, cut at a character to at most `max` bytes.
+pub(crate) fn fit_to(line: &str, max: usize) -> &str {
+    if line.len() <= max {
         return line;
     }
-    let mut end = MAX_LINE;
+    let mut end = max;
     while !line.is_char_boundary(end) {
         end = end.saturating_sub(1);
     }

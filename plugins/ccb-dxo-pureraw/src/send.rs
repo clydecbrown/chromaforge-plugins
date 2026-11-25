@@ -8,6 +8,7 @@
 use handoff::{Batch, file_name};
 use lcc_plugin_sdk::serde_json::{Value, json};
 
+use crate::end::{MAX_LINE, fit_to};
 use crate::filing::{AUTOMATIC, Album, Filing, Settings, VERSION_SETTING};
 use crate::versions::{self, Installed, VERSION_FILE, bundle_id, from_label, from_setting, is_tested, label, tested_names};
 use crate::{BATCH, Host, LR_VERSION, NEWER_CHROMAFORGE, PLUGIN_NAME, PROGRAM, PROGRAM_NAME, RUN_RECORD, VERSION_ARG, unknown_method};
@@ -37,6 +38,12 @@ fn select_first() -> Value {
 /// leaves several (no tested one, more than one experimental) they're offered in the dialog. It only
 /// reads, and gives the same answer for the same state: the host asks it twice.
 pub fn prepare(host: &mut impl Host, selection: &[String]) -> Result<Value, String> {
+    let reply = prepare_step(host, selection);
+    log_result(host, &reply);
+    reply
+}
+
+fn prepare_step(host: &mut impl Host, selection: &[String]) -> Result<Value, String> {
     if selection.is_empty() {
         return Ok(select_first());
     }
@@ -113,6 +120,12 @@ fn choose_in_settings() -> &'static str {
 /// Refusals are messages for the user, not errors; an error is something the host or the plug-in got
 /// wrong.
 pub fn send(host: &mut impl Host, selection: &[String], choice: &Value, source: &Value) -> Result<Value, String> {
+    let reply = send_step(host, selection, choice, source);
+    log_result(host, &reply);
+    reply
+}
+
+fn send_step(host: &mut impl Host, selection: &[String], choice: &Value, source: &Value) -> Result<Value, String> {
     if selection.is_empty() {
         return Ok(select_first());
     }
@@ -183,7 +196,7 @@ pub fn send(host: &mut impl Host, selection: &[String], choice: &Value, source: 
     }
     let left_out = named(&skipped);
     if batch.is_empty() {
-        return Ok(message(format!("Nothing was sent to {PROGRAM_NAME}: {left_out}.")));
+        return Ok(json!({"message": format!("Nothing was sent to {PROGRAM_NAME}: {left_out}."), "skipped": skipped}));
     }
     let args = ["--as-lightroom-plugin", "--lr-version", LR_VERSION, "--batch-file", &format!("{{tmpDir}}/{BATCH}")];
     let mut record = batch.record();
@@ -211,8 +224,62 @@ pub fn send(host: &mut impl Host, selection: &[String], choice: &Value, source: 
     if !skipped.is_empty() {
         text.push_str(&format!(" Left out: {left_out}."));
     }
-    host.log(&format!("{run}: sent {photos} to {}", label(version)));
     Ok(json!({"message": text, "run": run, "sent": count, "skipped": skipped, "version": version, "experimental": !is_tested(version)}))
+}
+
+/// Logs a step's reply, or the error the host will show for it.
+fn log_result(host: &mut impl Host, reply: &Result<Value, String>) {
+    match reply {
+        Ok(reply) => log_reply(host, reply),
+        Err(e) => log_reply(host, &json!({"message": e})),
+    }
+}
+
+/// Writes the `message` of `reply`, the words the user is shown, to the log, so the log is the whole record
+/// (the toast is gone with the next action). A reply that started a run leads with its id. Photos are named
+/// by file name: a path in the text is cut to its file name, as the log goes into public bug reports.
+fn log_reply(host: &mut impl Host, reply: &Value) {
+    let Some(text) = reply.get("message").and_then(Value::as_str) else { return };
+    let text = without_paths(text);
+    let line = match reply.get("run").and_then(Value::as_str) {
+        Some(run) if !run.is_empty() => format!("{run}: {text}"),
+        _ => text,
+    };
+    if line.len() <= MAX_LINE {
+        host.log(&line);
+        return;
+    }
+    let left_out = reply.get("skipped").and_then(Value::as_array).map_or(0, Vec::len);
+    let tail = if left_out > 0 { format!(" … ({left_out} left out in all)") } else { " …".to_string() };
+    host.log(&format!("{}{tail}", fit_to(&line, MAX_LINE.saturating_sub(tail.len()))));
+}
+
+/// `text` with each absolute path in it cut to its file name. A path in quotes runs to the closing quote (a
+/// folder name may have spaces); any other runs to the next space, less the punctuation that ends a sentence.
+fn without_paths(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut before = ' ';
+    while let Some(c) = rest.chars().next() {
+        let starts = c == '/' && (before.is_whitespace() || matches!(before, '"' | '\'' | '(' | '`'));
+        if !starts {
+            out.push(c);
+            before = c;
+            rest = rest.get(c.len_utf8()..).unwrap_or_default();
+            continue;
+        }
+        let end = match before {
+            '"' | '\'' | '`' => rest.find(before),
+            _ => None,
+        }
+        .unwrap_or_else(|| rest.find(char::is_whitespace).unwrap_or(rest.len()));
+        let path = rest.get(..end).unwrap_or(rest);
+        let core = if matches!(before, '"' | '\'' | '`') { path } else { path.trim_end_matches(['.', ',', ';', ':', ')', '"', '\'']) };
+        out.push_str(file_name(core));
+        before = core.chars().last().unwrap_or(' ');
+        rest = rest.get(core.len()..).unwrap_or_default();
+    }
+    out
 }
 
 fn not_installed() -> String {
@@ -373,5 +440,14 @@ mod tests {
         assert_eq!(named(&s(&["a", "b", "c"])), "a, b and c");
         let many: Vec<String> = (0..12).map(|i| i.to_string()).collect();
         assert_eq!(named(&many), "0, 1, 2, 3, 4, 5, 6, 7, 8, 9 and 2 more");
+    }
+
+    #[test]
+    fn a_path_in_a_logged_reply_is_cut_to_its_file_name() {
+        assert_eq!(without_paths("a.nef couldn't be read: no /Users/me/Pictures/a.nef here."), "a.nef couldn't be read: no a.nef here.");
+        assert_eq!(without_paths("couldn't read \"/Users/me/My Photos/a.nef\": gone"), "couldn't read \"a.nef\": gone");
+        assert_eq!(without_paths("no /Users/me/a.nef here with a/b ratio"), "no a.nef here with a/b ratio");
+        assert_eq!(without_paths("(/x/y.nef), /z"), "(y.nef), z");
+        assert_eq!(without_paths("Select the raw photos first."), "Select the raw photos first.");
     }
 }

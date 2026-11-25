@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1] - Unreleased
+
+- **The log is the whole record.** Every reply Send Selected Photos shows you (nothing selected, DxO PureRAW not
+  installed or not allowed, too many photos, nothing it could send, and the send itself with the album reason and
+  the photos left out) is also a line in the plug-in's log (Plug-in Manager ▸ Log), with the same words. A send's
+  line starts with its run id. The log names photos by file name, never a path. When Chromaforge asks the plug-in
+  twice before a send, a refusal can appear twice.
+
 ## [0.2.0] - 2026-11-19
 
 First public release, for macOS only. **File ▸ Plug-ins ▸ ccb: Edit in DxO PureRAW ▸ Send Selected Photos** sends raw

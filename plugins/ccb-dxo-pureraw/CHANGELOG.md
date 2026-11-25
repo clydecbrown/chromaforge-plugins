@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.1] - Unreleased
+## [0.2.1] - 2026-11-24
 
 - **The log is the whole record.** Every reply Send Selected Photos shows you (nothing selected, DxO PureRAW not
   installed or not allowed, too many photos, nothing it could send, and the send itself with the album reason and

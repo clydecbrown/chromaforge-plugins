@@ -1,9 +1,9 @@
 {
   "ccb-dxo-pureraw": {
-    "changelog": "https://github.com/clydecbrown/chromaforge-plugins/blob/ccb-dxo-pureraw-v0.2.0/plugins/ccb-dxo-pureraw/CHANGELOG.md",
+    "changelog": "https://github.com/clydecbrown/chromaforge-plugins/blob/ccb-dxo-pureraw-v0.2.1/plugins/ccb-dxo-pureraw/CHANGELOG.md",
     "id": "io.github.clydecbrown.dxo-pureraw",
     "name": "ccb: Edit in DxO PureRAW",
-    "notes": "First public release, for macOS only. File ▸ Plug-ins ▸ ccb: Edit in DxO PureRAW ▸ Send Selected Photos sends raw photos to DxO PureRAW, and adds each DNG it makes to the library. The DNGs go into the album you sent the photos from, next to their originals. Stacking each DNG on…",
+    "notes": "The log is the whole record. Every reply Send Selected Photos shows you (nothing selected, DxO PureRAW not installed or not allowed, too many photos, nothing it could send, and the send itself with the album reason and the photos left out) is also a line in the plug-in's log…",
     "permissions": [
       "catalog",
       "libraryAdd",
@@ -15,10 +15,10 @@
       "libraryAdd",
       "settings"
     ],
-    "sha256": "f6aea0fcd0da7f35832269ba75c88f175fa0e7c592596f511adf549e5d329546",
-    "tag": "ccb-dxo-pureraw-v0.2.0",
-    "url": "https://github.com/clydecbrown/chromaforge-plugins/releases/download/ccb-dxo-pureraw-v0.2.0/ccb-dxo-pureraw-0.2.0.wasm",
-    "version": "0.2.0"
+    "sha256": "520a03667fee138cef7ca57d9bd34c121a8751a87b8895202a7822a3d267ec1b",
+    "tag": "ccb-dxo-pureraw-v0.2.1",
+    "url": "https://github.com/clydecbrown/chromaforge-plugins/releases/download/ccb-dxo-pureraw-v0.2.1/ccb-dxo-pureraw-0.2.1.wasm",
+    "version": "0.2.1"
   },
   "format": 1
 }

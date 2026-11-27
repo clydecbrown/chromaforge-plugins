@@ -30,7 +30,7 @@ fn with_no_version_installed_the_prepare_step_names_the_tested_ones_and_nothing_
     let answer = prepared(&mut h, &a);
     assert_eq!(answer.as_object().map(|o| o.len()), Some(1), "exactly one of message, run, dialog: {answer}");
     let text = answer["message"].as_str().unwrap();
-    assert!(text.contains("DxO PureRAW isn't installed") && text.contains("tested with DxO PureRAW 3 or 2") && text.contains("2 to 9"), "{text}");
+    assert!(text.contains("DxO PureRAW isn't installed") && text.contains("DxO PureRAW 6, DxO PureRAW 3 or DxO PureRAW 2"), "{text}");
     assert_eq!(h.calls, 2, "it only reads the settings and lists the programs");
     assert!(h.started.is_empty());
 }
@@ -55,7 +55,7 @@ fn an_older_chromaforge_or_no_selection_is_a_message() {
 
 #[test]
 fn with_one_version_installed_it_runs_at_once_and_that_version_starts() {
-    for (version, name) in [(2, "DxO PureRAW 2"), (3, "DxO PureRAW 3"), (6, "DxO PureRAW 6 (experimental)")] {
+    for (version, name) in [(2, "DxO PureRAW 2"), (3, "DxO PureRAW 3"), (6, "DxO PureRAW 6")] {
         let (mut h, a) = host(&format!("ver-one-{version}"), &[version]);
         let answer = prepared(&mut h, &a);
         assert_eq!(answer, json!({"run": {"version": name}}), "no dialog");
@@ -67,17 +67,17 @@ fn with_one_version_installed_it_runs_at_once_and_that_version_starts() {
 }
 
 #[test]
-fn with_several_installed_the_newest_tested_runs_and_a_version_given_by_value_starts() {
-    let (mut h, a) = host("ver-many", &[5, 2, 3]);
+fn with_several_installed_the_newest_runs_and_a_version_given_by_value_starts() {
+    let (mut h, a) = host("ver-many", &[6, 2, 3]);
     let answer = prepared(&mut h, &a);
-    assert_eq!(answer, json!({"run": {"version": "DxO PureRAW 3"}}), "Automatic, with a tested one installed: no dialog");
+    assert_eq!(answer, json!({"run": {"version": "DxO PureRAW 6"}}), "Automatic, with several installed: the newest, no dialog");
     assert_eq!(prepared(&mut h, &a), answer, "the same answer when the host asks again");
     assert!(h.started.is_empty(), "the prepare step starts nothing");
 
     let reply = send(&mut h, std::slice::from_ref(&a), &json!("DxO PureRAW 2")).unwrap();
     assert_eq!(h.last_run().version, 2, "{reply}");
-    let reply = send(&mut h, std::slice::from_ref(&a), &json!("DxO PureRAW 5 (experimental)")).unwrap();
-    assert_eq!(h.last_run().version, 5, "{reply}");
+    let reply = send(&mut h, std::slice::from_ref(&a), &json!("DxO PureRAW 6")).unwrap();
+    assert_eq!(h.last_run().version, 6, "{reply}");
     assert_eq!(h.started.len(), 2, "one command, no second one");
 }
 
@@ -135,19 +135,19 @@ fn pureraw_2_starts_with_the_same_arguments_as_pureraw_3_and_its_own_bundle_id()
 }
 
 #[test]
-fn an_experimental_version_says_so_when_it_s_sent() {
-    let (mut h, a) = host("ver-exp-send", &[7]);
+fn pureraw_6_is_sent_like_the_others() {
+    let (mut h, a) = host("ver-six-send", &[6]);
     let reply = send(&mut h, &[a], &Value::Null).unwrap();
-    assert_eq!(reply["experimental"], true);
+    assert!(reply.get("experimental").is_none(), "{reply}");
     let text = reply["message"].as_str().unwrap();
-    assert!(text.starts_with("Sent 1 photo to DxO PureRAW 7, which this plug-in hasn't been tested with (experimental)."), "{text}");
+    assert!(text.starts_with("Sent 1 photo to DxO PureRAW 6."), "{text}");
 }
 
 #[test]
 fn the_settings_page_offers_automatic_and_each_version_installed_and_allowed() {
-    let (mut h, _) = host("set-prepare", &[5, 2, 3]);
+    let (mut h, _) = host("set-prepare", &[6, 2, 3]);
     h.preparing = true;
-    let offered = json!(["Automatic", "DxO PureRAW 3", "DxO PureRAW 2", "DxO PureRAW 5 (experimental)"]);
+    let offered = json!(["Automatic", "DxO PureRAW 6", "DxO PureRAW 3", "DxO PureRAW 2"]);
     assert_eq!(settings_prepare(&mut h).unwrap(), json!({"fields": {"version": {"options": offered, "default": "Automatic"}}}));
     let only_automatic = json!({"fields": {"version": {"options": ["Automatic"], "default": "Automatic"}}});
     h.installed.clear();
@@ -161,29 +161,26 @@ fn the_settings_page_offers_automatic_and_each_version_installed_and_allowed() {
 }
 
 #[test]
-fn automatic_runs_the_newest_tested_version_at_once_and_asks_only_between_experimental_ones() {
-    let (mut h, a) = host("set-auto", &[2, 3, 7]);
+fn automatic_runs_the_newest_installed_at_once() {
+    let (mut h, a) = host("set-auto", &[2, 3, 6]);
     for automatic in [None, Some(json!("Automatic")), Some(json!(""))] {
         if let Some(v) = automatic {
             h.set("version", v);
         }
-        assert_eq!(prepared(&mut h, &a), json!({"run": {"version": "DxO PureRAW 3"}}), "newest tested, no dialog");
+        assert_eq!(prepared(&mut h, &a), json!({"run": {"version": "DxO PureRAW 6"}}), "newest installed, no dialog");
     }
-    h.installed = vec![2, 7];
-    assert_eq!(prepared(&mut h, &a), json!({"run": {"version": "DxO PureRAW 2"}}), "a tested one before a newer experimental one");
-    h.installed = vec![7];
-    assert_eq!(prepared(&mut h, &a), json!({"run": {"version": "DxO PureRAW 7 (experimental)"}}), "the only one");
-    h.installed = vec![7, 5];
-    let offered = json!(["DxO PureRAW 7 (experimental)", "DxO PureRAW 5 (experimental)"]);
-    assert_eq!(prepared(&mut h, &a), json!({"dialog": {"version": {"options": offered, "default": "DxO PureRAW 7 (experimental)"}}}));
+    h.installed = vec![2, 3];
+    assert_eq!(prepared(&mut h, &a), json!({"run": {"version": "DxO PureRAW 3"}}), "the newest one installed");
+    h.installed = vec![2];
+    assert_eq!(prepared(&mut h, &a), json!({"run": {"version": "DxO PureRAW 2"}}), "the only one");
     let reply = send(&mut h, std::slice::from_ref(&a), &Value::Null).unwrap();
-    assert_eq!(h.last_run().version, 7, "without the dialog's value, the first one offered: {reply}");
+    assert_eq!(h.last_run().version, 2, "{reply}");
 }
 
 #[test]
 fn a_version_chosen_in_the_settings_runs_at_once_even_with_others_installed() {
-    let (mut h, a) = host("set-named", &[2, 3, 5]);
-    for (setting, version) in [("DxO PureRAW 2", 2), ("DxO PureRAW 5 (experimental)", 5), ("DxO PureRAW 5", 5)] {
+    let (mut h, a) = host("set-named", &[2, 3, 6]);
+    for (setting, version) in [("DxO PureRAW 2", 2), ("DxO PureRAW 3", 3), ("DxO PureRAW 6", 6)] {
         h.set("version", json!(setting));
         assert_eq!(prepared(&mut h, &a), json!({"run": {"version": label(version)}}), "{setting}");
         h.busy = false;
@@ -214,7 +211,10 @@ fn a_version_chosen_in_the_settings_but_gone_or_unknown_names_it_and_starts_noth
     h.installed.clear();
     h.set("version", json!("DxO PureRAW 2"));
     let text = prepared(&mut h, &a)["message"].as_str().unwrap().to_string();
-    assert!(text.contains("DxO PureRAW isn't installed") && text.contains("tested with DxO PureRAW 3 or 2"), "none installed: 02's message: {text}");
+    assert!(
+        text.contains("DxO PureRAW isn't installed") && text.contains("DxO PureRAW 6, DxO PureRAW 3 or DxO PureRAW 2"),
+        "none installed: 02's message: {text}"
+    );
     assert!(h.started.is_empty());
 }
 

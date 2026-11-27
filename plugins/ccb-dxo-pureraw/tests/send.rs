@@ -79,12 +79,7 @@ fn pureraw_missing_not_allowed_or_still_open_says_what_to_do_and_starts_nothing(
     // photo is read.
     type Case = (&'static str, fn(&mut FakeHost), &'static str, usize);
     let cases: [Case; 6] = [
-        (
-            "not-installed",
-            |h| h.installed.clear(),
-            "It's tested with DxO PureRAW 3 or 2: install one, then send the photos again. (This plug-in works on macOS only",
-            2,
-        ),
+        ("not-installed", |h| h.installed.clear(), "Install one, then send the photos again. (This plug-in works on macOS only", 2),
         ("not-granted", |h| h.granted = false, "tick DxO PureRAW on this plug-in's row", 2),
         ("old-host", |h| h.old = true, "needs a newer Chromaforge", 2),
         ("no-library-add", |h| h.library_add = false, "Allow \"Add files made from photos to the library\" for this plug-in first", 3),

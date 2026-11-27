@@ -1,5 +1,5 @@
 //! The round trip against the stand-in for PureRAW (`tools/fake-pureraw`): send, PureRAW's run on the
-//! batch the plug-in wrote, then `program.end`, for PureRAW 3, 2 and an experimental version. The host can't start the
+//! batch the plug-in wrote, then `program.end`, for PureRAW 6, 3 and 2. The host can't start the
 //! stand-in the way it starts PureRAW (the manifest names PureRAW by bundle id only), so each test runs
 //! the steps itself.
 
@@ -209,51 +209,6 @@ fn a_pureraw_2_run_closed_without_processing_adds_nothing_and_says_so() {
 }
 
 #[test]
-fn an_experimental_version_s_run_reads_its_own_files_and_says_it_s_experimental() {
-    let mut h = stacking("rt-exp");
-    let a = h.raw("a/1.CR3");
-    let b = h.raw("b/2.CR3");
-    let reply = round_trip_as(&mut h, &[&a, &b], Mode::Process, 6);
-    assert!(h.last_run().tmp.join(results_file(6)).is_file());
-    assert_eq!(reply["added"], 2, "{reply}");
-    assert_eq!(summary(&h), "DxO PureRAW 6 (experimental): added 2 DNGs, stacked on their originals.", "nothing to report");
-}
-
-#[test]
-fn an_experimental_version_that_leaves_no_results_says_how_to_report_it() {
-    let mut h = FakeHost::new("rt-exp-none");
-    let a = h.raw("a.CR3");
-    round_trip_as(&mut h, &[&a], Mode::Close, 6);
-    let s = summary(&h);
-    assert!(s.starts_with("DxO PureRAW 6 (experimental) processed nothing"), "{s}");
-    assert!(
-        s.contains("If it did process them")
-            && s.contains("Please report what happened at https://github.com/clydecbrown/chromaforge-plugins/issues"),
-        "{s}"
-    );
-}
-
-#[test]
-fn an_experimental_version_s_unexpected_lines_say_how_to_report_them() {
-    for (name, extra) in [("junk", "nonsense\n"), ("index", "7 /p/DxO/x.dng\n"), ("unsent", "- /elsewhere/x.dng\n0 /elsewhere/DxO/x.dng\n")] {
-        let mut h = FakeHost::new(&format!("rt-exp-{name}"));
-        h.installed = vec![5];
-        let a = h.raw("a.CR3");
-        send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
-        let run = h.last_run().clone();
-        fake_pureraw::run_as(&run.args, &run.tmp, Mode::Process, 5).unwrap();
-        let path = run.tmp.join(results_file(5));
-        let list = fs::read_to_string(&path).unwrap() + extra;
-        fs::write(&path, list).unwrap();
-        let req = h.end_request("exited");
-        let reply = end(&mut h, &req).unwrap();
-        assert_eq!(reply["added"], 1, "{name}: the rest still comes in");
-        let s = summary(&h);
-        assert!(s.contains("Some results weren't as expected") && s.contains("tested with DxO PureRAW 5"), "{name}: {s}");
-    }
-}
-
-#[test]
 fn a_tested_version_s_unexpected_lines_are_logged_without_asking_for_a_report() {
     let mut h = FakeHost::new("rt-v3-junk");
     let a = h.raw("a.CR3");
@@ -282,17 +237,56 @@ fn a_run_sent_before_there_were_versions_reads_pureraw_3_s_results() {
 }
 
 #[test]
-fn an_experimental_version_s_results_in_a_format_the_reader_doesn_t_know_say_how_to_report_them() {
-    let mut h = FakeHost::new("rt-exp-format");
-    h.installed = vec![5];
+fn pureraw_6_s_run_reads_its_own_files() {
+    let mut h = stacking("rt-v6");
+    let a = h.raw("a/1.CR3");
+    let b = h.raw("b/2.CR3");
+    let reply = round_trip_as(&mut h, &[&a, &b], Mode::Process, 6);
+    assert!(h.last_run().tmp.join(results_file(6)).is_file());
+    assert_eq!(reply["added"], 2, "{reply}");
+    assert_eq!(summary(&h), "DxO PureRAW 6: added 2 DNGs, stacked on their originals.", "nothing to report");
+}
+
+#[test]
+fn pureraw_6_that_leaves_no_results_says_so_without_asking_for_a_report() {
+    let mut h = FakeHost::new("rt-v6-none");
+    let a = h.raw("a.CR3");
+    round_trip_as(&mut h, &[&a], Mode::Close, 6);
+    let s = summary(&h);
+    assert!(s.starts_with("DxO PureRAW 6 processed nothing"), "{s}");
+    assert!(!s.contains("report"), "{s}");
+}
+
+#[test]
+fn pureraw_6_s_unexpected_lines_are_logged_without_asking_for_a_report() {
+    for (name, extra) in [("junk", "nonsense\n"), ("index", "7 /p/DxO/x.dng\n"), ("unsent", "- /elsewhere/x.dng\n0 /elsewhere/DxO/x.dng\n")] {
+        let mut h = FakeHost::new(&format!("rt-v6-{name}"));
+        h.installed = vec![6];
+        let a = h.raw("a.CR3");
+        send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
+        let run = h.last_run().clone();
+        fake_pureraw::run_as(&run.args, &run.tmp, Mode::Process, 6).unwrap();
+        let path = run.tmp.join(results_file(6));
+        let list = fs::read_to_string(&path).unwrap() + extra;
+        fs::write(&path, list).unwrap();
+        let req = h.end_request("exited");
+        let reply = end(&mut h, &req).unwrap();
+        assert_eq!(reply["added"], 1, "{name}: the rest still comes in");
+        assert!(!summary(&h).contains("report"), "{name}: {}", summary(&h));
+    }
+}
+
+#[test]
+fn pureraw_6_s_results_in_a_format_the_reader_doesn_t_know_are_not_reported() {
+    let mut h = FakeHost::new("rt-v6-format");
+    h.installed = vec![6];
     let a = h.raw("a.CR3");
     send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
     let run = h.last_run().clone();
-    fake_pureraw::run_as(&run.args, &run.tmp, Mode::Process, 5).unwrap();
-    fs::write(run.tmp.join(results_file(5)), "{\"processed\": [\"a.CR3\"]}\n").unwrap();
+    fake_pureraw::run_as(&run.args, &run.tmp, Mode::Process, 6).unwrap();
+    fs::write(run.tmp.join(results_file(6)), "{\"processed\": [\"a.CR3\"]}\n").unwrap();
     let req = h.end_request("exited");
     let reply = end(&mut h, &req).unwrap();
     assert_eq!(reply["added"], 0);
-    let s = summary(&h);
-    assert!(s.contains("Some results weren't as expected") && s.contains("tested with DxO PureRAW 5"), "{s}");
+    assert!(!summary(&h).contains("report"), "{}", summary(&h));
 }

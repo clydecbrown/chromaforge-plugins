@@ -38,9 +38,7 @@ pub const MANIFEST: &str = concat!(
     "catalog": true,
     "libraryAdd": true,
     "programs": [{"id": "pureraw", "name": "DxO PureRAW", "macBundleIds": [
-      "com.dxo-labs.PureRawv9.standalone", "com.dxo-labs.PureRawv8.standalone", "com.dxo-labs.PureRawv7.standalone",
-      "com.dxo-labs.PureRawv6.standalone", "com.dxo-labs.PureRawv5.standalone", "com.dxo-labs.PureRawv4.standalone",
-      "com.dxo-labs.PureRawv3.standalone", "com.dxo-labs.PureRawv2.standalone"]}]
+      "com.dxo-labs.PureRAWv6.standalone", "com.dxo-labs.PureRawv3.standalone", "com.dxo-labs.PureRawv2.standalone"]}]
   },
   "commands": [{"id": "send", "label": "Send Selected Photos", "prepare": true,
     "dialog": [{"key": "version", "label": "Version", "type": "choice", "options": []}]}],
@@ -130,9 +128,14 @@ mod tests {
         assert_eq!(perms.keys().collect::<Vec<_>>(), ["catalog", "libraryAdd", "programs"], "nothing else is asked for");
         assert_eq!(perms["catalog"], true);
         assert_eq!(perms["libraryAdd"], true);
-        let ids: Vec<String> = (versions::OLDEST..=versions::NEWEST).rev().map(versions::bundle_id).collect();
-        assert_eq!(ids.len(), 8, "the host takes at most 8 bundle ids per program");
-        assert_eq!(perms["programs"], serde_json::json!([{"id": PROGRAM, "name": PROGRAM_NAME, "macBundleIds": ids}]), "9 down to 2, newest first");
+        let ids: Vec<String> = versions::declared().map(versions::bundle_id).collect();
+        assert!(ids.len() <= 8, "the host takes at most 8 bundle ids per program");
+        assert_eq!(perms["programs"], serde_json::json!([{"id": PROGRAM, "name": PROGRAM_NAME, "macBundleIds": ids}]), "6, 3 and 2, newest first");
+        assert_eq!(
+            ids,
+            ["com.dxo-labs.PureRAWv6.standalone", "com.dxo-labs.PureRawv3.standalone", "com.dxo-labs.PureRawv2.standalone"],
+            "the spelling DxO uses for each"
+        );
         assert_eq!(
             m["commands"],
             serde_json::json!([{"id": "send", "label": "Send Selected Photos", "prepare": true,

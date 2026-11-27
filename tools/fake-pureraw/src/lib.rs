@@ -28,14 +28,20 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// How PureRAW `version` spells its file names: PureRAW 6 with a capital RAW, as observed; earlier ones
+/// `PureRawv`.
+fn spelling(version: u32) -> &'static str {
+    if version == 6 { "PureRAWv" } else { "PureRawv" }
+}
+
 /// PureRAW `version`'s results list, in `$TMPDIR`.
 pub fn results_file(version: u32) -> String {
-    format!("dxo-imported-files-PureRawv{version}")
+    format!("dxo-imported-files-{}{version}", spelling(version))
 }
 
 /// The empty file PureRAW `version` writes after the results.
 pub fn trigger_file(version: u32) -> String {
-    format!("dxo-trigger-PureRawv{version}")
+    format!("dxo-trigger-{}{version}", spelling(version))
 }
 
 /// How the run ends.
@@ -222,6 +228,14 @@ mod tests {
         assert!(!run(&args(&dir.join("batch")), &dir, Mode::Busy).unwrap().results);
         assert!(dir.join("batch").is_file());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pureraw_6_names_its_files_with_a_capital_raw_as_observed() {
+        assert_eq!(results_file(6), "dxo-imported-files-PureRAWv6");
+        assert_eq!(trigger_file(6), "dxo-trigger-PureRAWv6");
+        assert_eq!(results_file(3), "dxo-imported-files-PureRawv3", "the others keep PureRAW 3's spelling");
+        assert_eq!(trigger_file(3), "dxo-trigger-PureRawv3");
     }
 
     fn photos(dir: &Path, names: &[&str]) -> Vec<String> {

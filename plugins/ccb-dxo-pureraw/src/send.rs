@@ -10,7 +10,7 @@ use lcc_plugin_sdk::serde_json::{Value, json};
 
 use crate::end::{MAX_LINE, fit_to};
 use crate::filing::{AUTOMATIC, Album, Filing, Settings, VERSION_SETTING};
-use crate::versions::{self, Installed, VERSION_FILE, bundle_id, from_label, from_setting, is_tested, label, tested_names};
+use crate::versions::{self, Installed, VERSION_FILE, bundle_id, declared_names, from_label, from_setting, label};
 use crate::{BATCH, Host, LR_VERSION, NEWER_CHROMAFORGE, PLUGIN_NAME, PROGRAM, PROGRAM_NAME, RUN_RECORD, VERSION_ARG, unknown_method};
 
 /// The most photos one send takes, a rule of thumb. Every DNG is added in the one `program.end` call,
@@ -34,8 +34,7 @@ fn select_first() -> Value {
 }
 
 /// The prepare step: how Send Selected Photos runs on `selection`. No version installed and allowed
-/// is a message; the version setting, or the only version installed, runs at once; when Automatic
-/// leaves several (no tested one, more than one experimental) they're offered in the dialog. It only
+/// is a message; otherwise the version setting, or Automatic (the newest one installed), runs at once. It only
 /// reads, and gives the same answer for the same state: the host asks it twice.
 pub fn prepare(host: &mut impl Host, selection: &[String]) -> Result<Value, String> {
     let reply = prepare_step(host, selection);
@@ -57,10 +56,6 @@ fn prepare_step(host: &mut impl Host, selection: &[String]) -> Result<Value, Str
     };
     Ok(match decide(&installed, &settings) {
         Decision::Run(v) => json!({"run": {VERSION_ARG: label(v)}}),
-        Decision::Ask(all) => {
-            let labels: Vec<String> = all.iter().map(|v| label(*v)).collect();
-            json!({"dialog": {VERSION_ARG: {"options": labels, "default": labels.first()}}})
-        }
         Decision::Refuse(why) => message(why),
     })
 }
@@ -79,14 +74,12 @@ pub fn settings_prepare(host: &mut impl Host) -> Result<Value, String> {
 #[derive(Debug, PartialEq, Eq)]
 enum Decision {
     Run(u32),
-    /// Automatic leaves these, in the order offered.
-    Ask(Vec<u32>),
     /// Why none can, for the user.
     Refuse(String),
 }
 
-/// The version `settings` choose from `installed` (at least one, allowed): the one named, or with
-/// Automatic the newest tested one, the only one, or a choice.
+/// The version `settings` choose from `installed` (allowed): the one named, or with Automatic the newest
+/// one installed.
 fn decide(installed: &Installed, settings: &Settings) -> Decision {
     if !settings.is_automatic() {
         return match from_setting(&settings.version) {
@@ -103,11 +96,10 @@ fn decide(installed: &Installed, settings: &Settings) -> Decision {
             )),
         };
     }
-    // tested versions come first, newest first
-    match installed.versions.as_slice() {
-        [first, ..] if is_tested(*first) => Decision::Run(*first),
-        [only] => Decision::Run(*only),
-        all => Decision::Ask(all.to_vec()),
+    // the list is newest first
+    match installed.versions.first() {
+        Some(newest) => Decision::Run(*newest),
+        None => Decision::Refuse(not_installed()),
     }
 }
 
@@ -212,11 +204,7 @@ fn send_step(host: &mut impl Host, selection: &[String], choice: &Value, source:
     let photos = if count == 1 { "1 photo".to_string() } else { format!("{count} photos") };
     let made = where_they_go(&filing, count == 1);
     let name = versions::name(version);
-    let mut text = if is_tested(version) {
-        format!("Sent {photos} to {name}.")
-    } else {
-        format!("Sent {photos} to {name}, which this plug-in hasn't been tested with (experimental).")
-    };
+    let mut text = format!("Sent {photos} to {name}.");
     text.push_str(&format!(" Choose its settings in its window; {made} when it's done."));
     if let Album::Not(why) = &filing.album {
         text.push_str(&format!(" {} won't go into an album: {why}.", if count == 1 { "It" } else { "They" }));
@@ -224,7 +212,7 @@ fn send_step(host: &mut impl Host, selection: &[String], choice: &Value, source:
     if !skipped.is_empty() {
         text.push_str(&format!(" Left out: {left_out}."));
     }
-    Ok(json!({"message": text, "run": run, "sent": count, "skipped": skipped, "version": version, "experimental": !is_tested(version)}))
+    Ok(json!({"message": text, "run": run, "sent": count, "skipped": skipped, "version": version}))
 }
 
 /// Logs a step's reply, or the error the host will show for it.
@@ -284,11 +272,9 @@ fn without_paths(text: &str) -> String {
 
 fn not_installed() -> String {
     format!(
-        "{PROGRAM_NAME} isn't installed on this computer, or not in a version this plug-in knows ({} to {}; a later one needs an update \
-         of the plug-in). It's tested with {}: install one, then send the photos again. (This plug-in works on macOS only for now.)",
-        versions::OLDEST,
-        versions::NEWEST,
-        tested_names()
+        "{PROGRAM_NAME} isn't installed on this computer, or not in a version this plug-in knows ({}; a later one needs an update \
+         of the plug-in). Install one, then send the photos again. (This plug-in works on macOS only for now.)",
+        declared_names()
     )
 }
 
@@ -344,7 +330,6 @@ fn chosen(host: &mut impl Host, choice: &Value, settings: &Settings) -> Result<R
     if choice.is_null() || choice.as_str() == Some("") {
         return Ok(match decide(&installed, settings) {
             Decision::Run(v) => Ok(v),
-            Decision::Ask(all) => all.first().copied().ok_or_else(not_installed),
             Decision::Refuse(why) => Err(why),
         });
     }
@@ -432,6 +417,15 @@ fn named(items: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_runs_the_newest_version_installed() {
+        let settings = Settings { add_to_album: true, stack: false, version: AUTOMATIC.into() };
+        assert!(matches!(decide(&Installed { granted: true, versions: vec![6, 3, 2] }, &settings), Decision::Run(6)));
+        assert!(matches!(decide(&Installed { granted: true, versions: vec![3, 2] }, &settings), Decision::Run(3)));
+        assert!(matches!(decide(&Installed { granted: true, versions: vec![2] }, &settings), Decision::Run(2)));
+        assert!(matches!(decide(&Installed { granted: true, versions: vec![] }, &settings), Decision::Refuse(_)));
+    }
 
     #[test]
     fn named_lists_a_few_and_counts_the_rest() {

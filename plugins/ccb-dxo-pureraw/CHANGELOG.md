@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+- **DxO PureRAW 6 is offered**, and tested. Its bundle id is `com.dxo-labs.PureRAWv6.standalone`, with a capital RAW,
+  which is how DxO spells it and what Chromaforge looks it up by. It is started with PureRAW 3's arguments and writes its
+  results list as `dxo-imported-files-PureRAWv6`. Checked on PureRAW 6.9 with runs of the order, names, fail, bad, empty,
+  close, cancel and busy cases (instant and last-settings modes). Not yet run: the no `--lr-version`, bad `--lr-version`
+  and installed-Lightroom-version cases.
+- **No experimental versions.** A version is offered only once it's tested. Automatic starts the newest version installed,
+  and the plug-in no longer marks any version as experimental or asks you to report one.
+- **PureRAW 4, 5, 7, 8 and 9 are no longer declared.** This plug-in hasn't seen them, so it doesn't offer them.
+- **Allow DxO PureRAW again after updating:** the PureRAW entry changes, so Chromaforge asks for it again. Until you
+  allow it in Plug-in Manager ▸ ccb: Edit in DxO PureRAW ▸ Permissions, Send Selected Photos says it isn't allowed.
+
 ## [0.2.1] - 2026-11-24
 
 - **The log is the whole record.** Every reply Send Selected Photos shows you (nothing selected, DxO PureRAW not

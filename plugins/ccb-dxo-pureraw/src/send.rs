@@ -332,10 +332,7 @@ fn chosen(host: &mut impl Host, settings: &Settings) -> Result<Result<u32, Strin
 
 /// The refusal for a chosen `version` that isn't installed now.
 fn gone(version: u32) -> String {
-    format!(
-        "{} isn't installed any more, so nothing was sent. Send the photos again to choose from the versions installed now.",
-        versions::name(version)
-    )
+    format!("{} isn't installed any more, so nothing was sent. Choose another one in this plug-in's settings.", versions::name(version))
 }
 
 /// Why the DNGs couldn't come back, before anything is read: adding to the library not allowed.

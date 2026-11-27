@@ -108,10 +108,7 @@ fn a_version_removed_between_the_check_and_the_start_says_so() {
     h.set("version", json!(label(2)));
     h.gone_at_start = true;
     let reply = send(&mut h, &[a]).unwrap();
-    assert_eq!(
-        reply["message"],
-        "DxO PureRAW 2 isn't installed any more, so nothing was sent. Send the photos again to choose from the versions installed now."
-    );
+    assert_eq!(reply["message"], "DxO PureRAW 2 isn't installed any more, so nothing was sent. Choose another one in this plug-in's settings.");
     assert!(h.started.is_empty());
 }
 

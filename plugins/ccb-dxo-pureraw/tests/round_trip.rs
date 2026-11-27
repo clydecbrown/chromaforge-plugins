@@ -9,7 +9,7 @@ use std::fs;
 
 use ccb_dxo_pureraw::end;
 use ccb_dxo_pureraw::versions::{VERSION_FILE, label, results_file};
-use fake_pureraw::{Mode, output_of};
+use fake_pureraw::{Mode, output_for, output_of};
 use lcc_plugin_sdk::serde_json::{Value, json};
 use support::{FakeHost, send};
 
@@ -290,4 +290,54 @@ fn pureraw_6_s_results_in_a_format_the_reader_doesn_t_know_are_not_reported() {
     let reply = end(&mut h, &req).unwrap();
     assert_eq!(reply["added"], 0);
     assert!(!summary(&h).contains("report"), "{}", summary(&h));
+}
+
+#[test]
+fn pureraw_6_s_failed_photo_is_named_as_not_processed_and_the_rest_stack() {
+    let mut h = stacking("rt-v6-fail");
+    let ok = h.raw("a/ok.CR3");
+    let failed = h.raw("b/fail.CR3");
+    let reply = round_trip_as(&mut h, &[&ok, &failed], Mode::Process, 6);
+    assert_eq!(reply["added"], 1, "{reply}");
+    assert_eq!(h.stacked_on(&ok).len(), 1);
+    assert!(h.stacked_on(&failed).is_empty());
+    assert!(summary(&h).contains("not processed (failed or cancelled in DxO PureRAW): fail.CR3"), "{}", summary(&h));
+}
+
+#[test]
+fn a_cancelled_pureraw_6_run_adds_the_finished_photo_and_names_the_rest() {
+    let mut h = stacking("rt-v6-cancel");
+    let first = h.raw("a/1.CR3");
+    let second = h.raw("b/2.CR3");
+    let reply = round_trip_as(&mut h, &[&second, &first], Mode::Cancel, 6);
+    assert_eq!(reply["added"], 1, "{reply}");
+    assert_eq!(h.stacked_on(&first).len(), 1);
+    assert!(h.stacked_on(&second).is_empty());
+    assert!(summary(&h).contains("not processed (failed or cancelled in DxO PureRAW): 2.CR3"), "{}", summary(&h));
+}
+
+#[test]
+fn pureraw_6_s_output_listed_twice_is_added_once() {
+    let mut h = FakeHost::new("rt-v6-repeat");
+    let a = h.raw("a.CR3");
+    let reply = round_trip_as(&mut h, &[&a], Mode::RepeatOutputs, 6);
+    let list = fs::read_to_string(h.last_run().tmp.join(results_file(6))).unwrap();
+    // a precondition on the stand-in's list (two `0` lines for one output), not an observed fact about
+    // PureRAW's on-disk output, which gets a `-2` suffix
+    assert_eq!(list.matches("_DxO_DeepPRIME.dng").count(), 2, "the stand-in lists it twice: {list}");
+    assert_eq!(h.adds.len(), 1);
+    assert_eq!(reply["added"], 1);
+}
+
+#[test]
+fn pureraw_6_s_changed_output_names_still_stack_on_their_originals() {
+    let mut h = stacking("rt-v6-names");
+    let a = h.raw("a/back\\slash.CR3");
+    let b = h.raw("b/quote\"d.CR3");
+    let (out_a, out_b) = (output_for(&h.path_of(&a), 6).unwrap(), output_for(&h.path_of(&b), 6).unwrap());
+    assert!(out_a.ends_with("back_slash-CR3_DxO_DeepPRIME.dng") && out_b.ends_with("quote_d-CR3_DxO_DeepPRIME.dng"), "{out_a} {out_b}");
+    let reply = round_trip_as(&mut h, &[&a, &b], Mode::Process, 6);
+    assert_eq!(reply["added"], 2, "{reply}");
+    assert_eq!(h.stacked_on(&a).len(), 1);
+    assert_eq!(h.stacked_on(&b).len(), 1);
 }

@@ -50,14 +50,9 @@ pub fn name(version: u32) -> String {
     format!("{} {version}", crate::PROGRAM_NAME)
 }
 
-/// The version as the dialog and the settings name it.
+/// The version as the settings page and the summaries name it.
 pub fn label(version: u32) -> String {
     name(version)
-}
-
-/// The version a [`label`] stands for.
-pub fn from_label(text: &str) -> Option<u32> {
-    declared().find(|v| label(*v) == text)
 }
 
 /// The version a setting names.
@@ -159,11 +154,8 @@ mod tests {
         assert_eq!(label(2), "DxO PureRAW 2");
         assert_eq!(label(6), "DxO PureRAW 6");
         for v in declared() {
-            assert_eq!(from_label(&label(v)), Some(v));
             assert_eq!(from_setting(&name(v)), Some(v));
         }
-        assert_eq!(from_label("DxO PureRAW 5"), None, "PureRAW 5 isn't declared");
-        assert_eq!(from_label("DxO PureRAW 10"), None);
         assert_eq!(from_setting("DxO PureRAW 5"), None, "a setting naming an undeclared version finds nothing");
         assert_eq!(from_setting("DxO PureRAW 6 (experimental)"), None, "no version is offered as experimental");
         assert_eq!(from_setting("Automatic"), None);

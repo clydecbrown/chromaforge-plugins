@@ -18,7 +18,7 @@ fn ended_with(test: &str, results: Option<&str>, record: Option<&[u8]>) -> (Fake
     let mut h = FakeHost::new(test);
     let a = h.raw("a.dng");
     let b = h.raw("b.dng");
-    send(&mut h, &[a.clone(), b.clone()], &Value::Null).unwrap();
+    send(&mut h, &[a.clone(), b.clone()]).unwrap();
     let tmp = h.last_run().tmp.clone();
     let (pa, pb) = (h.path_of(&a), h.path_of(&b));
     fs::create_dir_all(h.root.join("DxO")).unwrap();
@@ -81,7 +81,7 @@ fn a_list_over_the_host_s_size_limit_adds_nothing_and_says_why() {
 fn a_list_that_isn_t_text_adds_nothing() {
     let mut h = FakeHost::new("hostile-binary");
     let a = h.raw("a.dng");
-    send(&mut h, &[a], &Value::Null).unwrap();
+    send(&mut h, &[a]).unwrap();
     fs::write(h.last_run().tmp.join(results_file(3)), [0xff, 0xfe, 0x00]).unwrap();
     let req = h.end_request("exited");
     end(&mut h, &req).unwrap();
@@ -106,7 +106,7 @@ fn a_missing_or_damaged_run_record_adds_nothing() {
     // gone altogether
     let mut h = FakeHost::new("hostile-record-gone");
     let a = h.raw("a.dng");
-    send(&mut h, &[a], &Value::Null).unwrap();
+    send(&mut h, &[a]).unwrap();
     fs::remove_file(h.last_run().tmp.join(RUN_RECORD)).unwrap();
     let req = h.end_request("exited");
     end(&mut h, &req).unwrap();
@@ -160,7 +160,7 @@ fn a_revoked_library_add_stops_with_what_to_allow() {
     let mut h = FakeHost::new("hostile-revoked");
     let a = h.raw("a.dng");
     let b = h.raw("b.dng");
-    send(&mut h, &[a, b], &Value::Null).unwrap();
+    send(&mut h, &[a, b]).unwrap();
     let run = h.last_run().clone();
     fake_pureraw::run(&run.args, &run.tmp, fake_pureraw::Mode::Process).unwrap();
     h.library_add = false;
@@ -176,7 +176,7 @@ fn a_revoked_library_add_stops_with_what_to_allow() {
 fn every_log_line_fits_the_host_s_limit() {
     let mut h = FakeHost::new("hostile-long-names");
     let ids: Vec<String> = (0..30).map(|i| h.raw(&format!("{i}-{}.dng", "n".repeat(200)))).collect();
-    send(&mut h, &ids, &Value::Null).unwrap();
+    send(&mut h, &ids).unwrap();
     let tmp = h.last_run().tmp.clone();
     // results that all point outside the originals' folders, and long names everywhere
     let mut list = HEADER.to_string();
@@ -219,7 +219,7 @@ fn a_damaged_version_file_adds_nothing_and_says_why() {
     for (name, text) in [("junk", "x".repeat(1000)), ("out-of-range", "10".into()), ("zero-padded", "03".into()), ("empty", String::new())] {
         let mut h = FakeHost::new(&format!("hostile-version-{name}"));
         let a = h.raw("a.dng");
-        send(&mut h, &[a], &Value::Null).unwrap();
+        send(&mut h, &[a]).unwrap();
         let run = h.last_run().clone();
         fake_pureraw::run(&run.args, &run.tmp, fake_pureraw::Mode::Process).unwrap();
         fs::write(run.tmp.join(VERSION_FILE), &text).unwrap();

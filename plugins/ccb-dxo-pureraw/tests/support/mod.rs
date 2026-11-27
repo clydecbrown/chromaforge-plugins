@@ -91,9 +91,9 @@ pub struct FakeHost {
 }
 
 /// Send Selected Photos as the host runs it: with the session's source.
-pub fn send(h: &mut FakeHost, selection: &[String], choice: &Value) -> Result<Value, String> {
+pub fn send(h: &mut FakeHost, selection: &[String]) -> Result<Value, String> {
     let source = h.source.clone();
-    ccb_dxo_pureraw::send(h, selection, choice, &source)
+    ccb_dxo_pureraw::send(h, selection, &source)
 }
 
 impl FakeHost {

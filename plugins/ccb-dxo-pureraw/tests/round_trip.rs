@@ -22,12 +22,13 @@ fn round_trip(h: &mut FakeHost, photos: &[&str], mode: Mode) -> Value {
     round_trip_as(h, photos, mode, 3)
 }
 
-/// The same with PureRAW `version`, chosen in the dialog.
+/// The same with PureRAW `version`, chosen in the settings.
 fn round_trip_as(h: &mut FakeHost, photos: &[&str], mode: Mode, version: u32) -> Value {
     if !h.installed.contains(&version) {
         h.installed.push(version);
     }
-    send(h, &ids(photos), &json!(label(version))).unwrap();
+    h.set("version", json!(label(version)));
+    send(h, &ids(photos)).unwrap();
     let run = h.last_run().clone();
     assert_eq!(run.version, version);
     fake_pureraw::run_as(&run.args, &run.tmp, mode, version).unwrap();
@@ -101,7 +102,7 @@ fn a_missing_original_is_named_as_not_processed() {
 fn a_dng_saved_outside_its_original_s_folder_is_named_with_what_to_change() {
     let mut h = FakeHost::new("rt-outside");
     let a = h.raw("photos/a.dng");
-    send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
+    send(&mut h, &ids(&[&a])).unwrap();
     let run = h.last_run().clone();
     // PureRAW set to save into a folder of its own
     let elsewhere = h.root.join("Pictures/DxO/a_DxO.dng");
@@ -144,7 +145,7 @@ fn a_batch_pureraw_never_read_says_it_may_already_have_been_open() {
 fn stopping_the_wait_adds_nothing_even_when_results_are_there() {
     let mut h = FakeHost::new("rt-cancel");
     let a = h.raw("a.dng");
-    send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
+    send(&mut h, &ids(&[&a])).unwrap();
     let run = h.last_run().clone();
     fake_pureraw::run(&run.args, &run.tmp, Mode::Process).unwrap();
     let req = h.end_request("cancelled");
@@ -212,7 +213,7 @@ fn a_pureraw_2_run_closed_without_processing_adds_nothing_and_says_so() {
 fn a_tested_version_s_unexpected_lines_are_logged_without_asking_for_a_report() {
     let mut h = FakeHost::new("rt-v3-junk");
     let a = h.raw("a.CR3");
-    send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
+    send(&mut h, &ids(&[&a])).unwrap();
     let run = h.last_run().clone();
     fake_pureraw::run(&run.args, &run.tmp, Mode::Process).unwrap();
     let path = run.tmp.join(results_file(3));
@@ -227,7 +228,7 @@ fn a_tested_version_s_unexpected_lines_are_logged_without_asking_for_a_report() 
 fn a_run_sent_before_there_were_versions_reads_pureraw_3_s_results() {
     let mut h = FakeHost::new("rt-no-version");
     let a = h.raw("a.CR3");
-    send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
+    send(&mut h, &ids(&[&a])).unwrap();
     let run = h.last_run().clone();
     fs::remove_file(run.tmp.join(VERSION_FILE)).unwrap();
     fake_pureraw::run(&run.args, &run.tmp, Mode::Process).unwrap();
@@ -263,7 +264,7 @@ fn pureraw_6_s_unexpected_lines_are_logged_without_asking_for_a_report() {
         let mut h = FakeHost::new(&format!("rt-v6-{name}"));
         h.installed = vec![6];
         let a = h.raw("a.CR3");
-        send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
+        send(&mut h, &ids(&[&a])).unwrap();
         let run = h.last_run().clone();
         fake_pureraw::run_as(&run.args, &run.tmp, Mode::Process, 6).unwrap();
         let path = run.tmp.join(results_file(6));
@@ -281,7 +282,7 @@ fn pureraw_6_s_results_in_a_format_the_reader_doesn_t_know_are_not_reported() {
     let mut h = FakeHost::new("rt-v6-format");
     h.installed = vec![6];
     let a = h.raw("a.CR3");
-    send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
+    send(&mut h, &ids(&[&a])).unwrap();
     let run = h.last_run().clone();
     fake_pureraw::run_as(&run.args, &run.tmp, Mode::Process, 6).unwrap();
     fs::write(run.tmp.join(results_file(6)), "{\"processed\": [\"a.CR3\"]}\n").unwrap();

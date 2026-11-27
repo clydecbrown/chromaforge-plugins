@@ -38,30 +38,32 @@ fn every_reply_a_send_returns_is_also_in_the_log_in_the_same_words() {
         let mut h = FakeHost::new(&format!("log-{name}"));
         let a = h.raw("a.dng");
         set(&mut h);
-        let reply = send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
+        let reply = send(&mut h, &ids(&[&a])).unwrap();
         logged_once(&h, &reply, name);
     }
     let mut h = FakeHost::new("log-empty");
-    let reply = send(&mut h, &[], &Value::Null).unwrap();
+    let reply = send(&mut h, &[]).unwrap();
     logged_once(&h, &reply, "nothing selected");
     let many: Vec<String> = (0..=ccb_dxo_pureraw::MAX_SELECTED).map(|i| i.to_string()).collect();
-    let reply = send(&mut h, &many, &Value::Null).unwrap();
+    let reply = send(&mut h, &many).unwrap();
     logged_once(&h, &reply, "too many to read");
     let mut h = FakeHost::new("log-over");
     let raws: Vec<String> = (0..=ccb_dxo_pureraw::MAX_PHOTOS).map(|i| h.raw(&format!("r{i}.CR3"))).collect();
-    let reply = send(&mut h, &raws, &Value::Null).unwrap();
+    let reply = send(&mut h, &raws).unwrap();
     logged_once(&h, &reply, "too many raw");
     let mut h = FakeHost::new("log-nothing");
     let jpeg = h.file("a.jpg", "image");
-    let reply = send(&mut h, &ids(&[&jpeg]), &Value::Null).unwrap();
+    let reply = send(&mut h, &ids(&[&jpeg])).unwrap();
     logged_once(&h, &reply, "nothing sendable");
 }
 
 #[test]
-fn the_version_the_choice_names_being_gone_is_logged() {
+fn the_version_the_settings_choose_being_gone_is_logged() {
     let mut h = FakeHost::new("log-gone");
     let a = h.raw("a.dng");
-    let reply = send_hook(&mut h, &ids(&[&a]), &json!("DxO PureRAW 9"), &Value::Null).unwrap();
+    h.installed = vec![3];
+    h.set("version", json!("DxO PureRAW 2"));
+    let reply = send(&mut h, &ids(&[&a])).unwrap();
     logged_once(&h, &reply, "version gone");
 }
 
@@ -70,7 +72,7 @@ fn a_run_that_wouldn_t_start_is_logged() {
     let mut h = FakeHost::new("log-nostart");
     let a = h.raw("a.dng");
     h.busy = true;
-    let reply = send(&mut h, &ids(&[&a]), &Value::Null).unwrap();
+    let reply = send(&mut h, &ids(&[&a])).unwrap();
     assert!(message(&reply).contains("still open from the last send"));
     logged_once(&h, &reply, "wouldn't start");
 }
@@ -91,7 +93,7 @@ impl ccb_dxo_pureraw::Host for Broken {
 fn an_error_the_host_shows_is_logged_too() {
     let mut h = Broken(FakeHost::new("log-err"));
     let a = h.0.raw("a.dng");
-    let e = send_hook(&mut h, &ids(&[&a]), &Value::Null, &Value::Null).unwrap_err();
+    let e = send_hook(&mut h, &ids(&[&a]), &Value::Null).unwrap_err();
     assert!(e.contains("boom"), "{e}");
     assert!(h.0.log.iter().any(|l| l.contains("boom")), "{:?}", h.0.log);
     let before = h.0.log.len();
@@ -104,7 +106,7 @@ fn a_send_that_starts_a_run_logs_one_line_with_the_run_id_the_album_reason_and_t
     let mut h = FakeHost::new("log-sent");
     let a = h.raw("a.CR3");
     let jpeg = h.file("b.jpg", "image");
-    let reply = send(&mut h, &ids(&[&a, &jpeg]), &Value::Null).unwrap();
+    let reply = send(&mut h, &ids(&[&a, &jpeg])).unwrap();
     let run = reply["run"].as_str().unwrap();
     assert_eq!(h.log.len(), 1, "an action is in the log once: {:?}", h.log);
     assert_eq!(h.log[0], format!("{run}: {}", message(&reply)));
@@ -133,7 +135,7 @@ fn a_line_over_the_hosts_limit_is_cut_at_a_character_and_counts_the_photos_left_
     let mut h = FakeHost::new("log-long");
     let long = "é".repeat(120);
     let files: Vec<String> = (0..15).map(|i| h.file(&format!("{long}{i}.jpg"), "image")).collect();
-    let reply = send(&mut h, &files, &Value::Null).unwrap();
+    let reply = send(&mut h, &files).unwrap();
     assert!(message(&reply).len() > 2048, "the reply itself is longer than a log line: {}", message(&reply).len());
     let line = h.log.last().unwrap();
     assert!(line.len() <= 2048, "{} bytes", line.len());
@@ -153,10 +155,7 @@ fn no_module_but_send_returns_a_message_and_send_logs_every_one() {
             "send.rs" => {
                 // the two entry points log what their steps return; nothing returns around them
                 assert!(text.contains("let reply = prepare_step(host, selection);\n    log_result(host, &reply);"), "prepare logs its reply");
-                assert!(
-                    text.contains("let reply = send_step(host, selection, choice, source);\n    log_result(host, &reply);"),
-                    "send logs its reply"
-                );
+                assert!(text.contains("let reply = send_step(host, selection, source);\n    log_result(host, &reply);"), "send logs its reply");
             }
             _ => assert_eq!(returns, 0, "{name} returns a message that nothing logs: route it through send.rs's log_reply or log it"),
         }

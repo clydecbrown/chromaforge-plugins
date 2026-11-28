@@ -3,8 +3,8 @@
 //! were sent from, stacked on the photo it came from, or both, as the settings say ([`filing`]).
 //!
 //! - [`prepare`]: before the menu command runs, finds which versions of PureRAW are installed
-//!   ([`versions`]): none is a message; the version setting, or the only one installed, runs at once;
-//!   more are a choice. [`settings_prepare`] offers the installed ones on the settings page.
+//!   ([`versions`]): none is a message; otherwise the version the setting chooses, or the newest installed,
+//!   runs at once. [`settings_prepare`] offers the installed ones on the settings page.
 //! - [`send`]: the menu command. Writes the batch (one absolute path per line), `run.json` (which
 //!   photo each path came from, where the command ran from and the settings) and the version into the
 //!   run's folder and starts that PureRAW on it.
@@ -38,12 +38,9 @@ pub const MANIFEST: &str = concat!(
     "catalog": true,
     "libraryAdd": true,
     "programs": [{"id": "pureraw", "name": "DxO PureRAW", "macBundleIds": [
-      "com.dxo-labs.PureRawv9.standalone", "com.dxo-labs.PureRawv8.standalone", "com.dxo-labs.PureRawv7.standalone",
-      "com.dxo-labs.PureRawv6.standalone", "com.dxo-labs.PureRawv5.standalone", "com.dxo-labs.PureRawv4.standalone",
-      "com.dxo-labs.PureRawv3.standalone", "com.dxo-labs.PureRawv2.standalone"]}]
+      "com.dxo-labs.PureRAWv6.standalone", "com.dxo-labs.PureRawv3.standalone", "com.dxo-labs.PureRawv2.standalone"]}]
   },
-  "commands": [{"id": "send", "label": "Send Selected Photos", "prepare": true,
-    "dialog": [{"key": "version", "label": "Version", "type": "choice", "options": []}]}],
+  "commands": [{"id": "send", "label": "Send Selected Photos", "prepare": true}],
   "settings": [
     {"key": "addToAlbum", "label": "Add to the album I sent from", "type": "bool", "default": true},
     {"key": "stack", "label": "Stack on the original", "type": "bool", "default": false},
@@ -61,8 +58,6 @@ pub const PROGRAM_NAME: &str = "DxO PureRAW";
 pub const BATCH: &str = "batch";
 /// What was sent, in the run's folder (`handoff::RunRecord`).
 pub const RUN_RECORD: &str = "run.json";
-/// The dialog field that holds the version to run ([`versions::label`]).
-pub const VERSION_ARG: &str = "version";
 /// The Lightroom version passed to PureRAW. No Lightroom has it: with an installed version, PureRAW
 /// sometimes starts Lightroom Classic when it's done, and that Lightroom stays suspended.
 pub const LR_VERSION: &str = "99.0";
@@ -98,7 +93,7 @@ const NEWER_CHROMAFORGE: &str = "This plug-in needs a newer Chromaforge, one wit
 fn handle(req: &Request) -> Result<Value, String> {
     match req.hook() {
         "command" => match req.command() {
-            "send" => send(&mut Sdk, &req.selection(), req.arg(VERSION_ARG), req.source()),
+            "send" => send(&mut Sdk, &req.selection(), req.source()),
             other => Err(format!("unknown command {other}")),
         },
         "command.prepare" => match req.command() {
@@ -130,13 +125,18 @@ mod tests {
         assert_eq!(perms.keys().collect::<Vec<_>>(), ["catalog", "libraryAdd", "programs"], "nothing else is asked for");
         assert_eq!(perms["catalog"], true);
         assert_eq!(perms["libraryAdd"], true);
-        let ids: Vec<String> = (versions::OLDEST..=versions::NEWEST).rev().map(versions::bundle_id).collect();
-        assert_eq!(ids.len(), 8, "the host takes at most 8 bundle ids per program");
-        assert_eq!(perms["programs"], serde_json::json!([{"id": PROGRAM, "name": PROGRAM_NAME, "macBundleIds": ids}]), "9 down to 2, newest first");
+        let ids: Vec<String> = versions::declared().map(versions::bundle_id).collect();
+        assert!(ids.len() <= 8, "the host takes at most 8 bundle ids per program");
+        assert_eq!(perms["programs"], serde_json::json!([{"id": PROGRAM, "name": PROGRAM_NAME, "macBundleIds": ids}]), "6, 3 and 2, newest first");
+        assert_eq!(
+            ids,
+            ["com.dxo-labs.PureRAWv6.standalone", "com.dxo-labs.PureRawv3.standalone", "com.dxo-labs.PureRawv2.standalone"],
+            "the spelling DxO uses for each"
+        );
         assert_eq!(
             m["commands"],
-            serde_json::json!([{"id": "send", "label": "Send Selected Photos", "prepare": true,
-                "dialog": [{"key": VERSION_ARG, "label": "Version", "type": "choice", "options": []}]}])
+            serde_json::json!([{"id": "send", "label": "Send Selected Photos", "prepare": true}]),
+            "no dialog: the prepare step decides the version and the command runs it"
         );
     }
 

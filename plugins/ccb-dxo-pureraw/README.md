@@ -44,7 +44,7 @@ File ▸ Plug-ins ▸ Plug-in Manager…, then **Settings…** on this plug-in's
 |---|---|---|
 | **Add to the album I sent from** | on | Each DNG goes into the album you sent its photo from, next to it. |
 | **Stack on the original** | off | Each DNG is stacked on the photo it came from, also when it goes into an album. |
-| **PureRAW version** | Automatic | Which PureRAW to start (see [Versions](#versions)). The list shows the versions installed and allowed, experimental ones marked. |
+| **PureRAW version** | Automatic | Which PureRAW to start (see [Versions](#versions)). The list shows the versions installed and allowed. |
 
 - **The album is the one you sent the photos from**: the album, or the Quick Collection, shown in the Library
   when you chose Send Selected Photos. Other albums the photos are in don't count. Sent from a folder, All
@@ -85,23 +85,21 @@ Each major version of PureRAW installs as an app of its own (`DxO PureRAW 2.app`
 may have several. Send Selected Photos looks for the ones below that are installed and starts the one the
 **PureRAW version** setting chooses:
 
-- **Automatic** (the default): the newest tested version installed. With no tested version, the only one installed,
-  or, with several experimental ones, it asks which.
+- **Automatic** (the default): the newest version installed.
 - **A version you chose**: that one, whatever else is installed. If it's no longer installed, Send Selected Photos
   says so and starts nothing: choose another, or Automatic, in the settings.
 - With none installed, it says which to install.
 
 | Version | |
 |---|---|
+| **DxO PureRAW 6** | tested |
 | **DxO PureRAW 3** | tested |
 | **DxO PureRAW 2** | tested |
-| DxO PureRAW 4 to 9 | **experimental**: started with PureRAW 3's handoff, untested |
 
-- **Experimental** versions are started the way PureRAW 3 is, and their results read the way PureRAW 3's are. That
-  may not fit: a later version could write its list of results somewhere else, or differently. The messages and
-  the summary in its log say "experimental", and when something in the results isn't as expected (or nothing comes
-  back after you processed the photos) the log asks you to report it.
-- **A version becomes tested** once its handoff has been watched in three runs (processed, cancelled during
+PureRAW 4, 5, 7, 8 and 9 aren't offered: this plug-in hasn't probed them, so it doesn't know their bundle ids. Only tested
+versions are offered.
+
+- **A version is offered only once it's tested**: its handoff has been watched in three runs (processed, cancelled during
   processing, and closed without processing) and the stand-in that CI runs the round trip against
   (`tools/fake-pureraw`) does what that version does.
 - **To report how a version went**, open a
@@ -119,7 +117,7 @@ Chromaforge shows each one unticked when you install the plug-in. It needs all t
 |---|---|
 | **Read the catalog** (`catalog`) | To find each selected photo's file, and to tell raw files from others. It reads nothing else. |
 | **Add files made from photos to the library** (`libraryAdd`) | To add each DNG PureRAW makes, in the album you sent from or stacked on its original, as the settings say. Chromaforge allows only files in the original's folder or below it, and only an album that holds the original. |
-| **Start the program DxO PureRAW** (`programs`, bundle ids `com.dxo-labs.PureRawv9.standalone` down to `com.dxo-labs.PureRawv2.standalone`) | To open the PureRAW you choose with the photos you send. The plug-in passes it the list of files and the arguments its plug-in mode takes, nothing else. Each bundle id is one version of PureRAW. |
+| **Start the program DxO PureRAW** (`programs`, bundle ids `com.dxo-labs.PureRAWv6.standalone`, `com.dxo-labs.PureRawv3.standalone` and `com.dxo-labs.PureRawv2.standalone`) | To open the PureRAW you choose with the photos you send. The plug-in passes it the list of files and the arguments its plug-in mode takes, nothing else. Each bundle id is one version of PureRAW. |
 
 It asks for no network access and no other folders.
 

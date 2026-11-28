@@ -50,6 +50,10 @@ Chromaforge, no Lightroom.
 **Results**, in PureRAW's `$TMPDIR`: `dxo-imported-files-PureRawv<N>`, then an empty `dxo-trigger-PureRawv<N>`, then
 PureRAW exits.
 
+**PureRAW 6** (6.9, observed on 2026-11-27) spells its bundle id `com.dxo-labs.PureRAWv6.standalone` and its files
+`dxo-imported-files-PureRAWv6` and `dxo-trigger-PureRAWv6`. Its `--as-lightroom-plugin` start is the same as PureRAW 3's.
+Its preview mode (`--as-lightroom-preview-plugin`) also needs a short `TMPDIR`, because it listens on a socket there.
+
 PureRAW 3 writes it once, at the end:
 
     DxO PureRAW 3

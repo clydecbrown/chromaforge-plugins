@@ -28,14 +28,20 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// How PureRAW `version` spells its file names: PureRAW 6 with a capital RAW, as observed; earlier ones
+/// `PureRawv`.
+fn spelling(version: u32) -> &'static str {
+    if version == 6 { "PureRAWv" } else { "PureRawv" }
+}
+
 /// PureRAW `version`'s results list, in `$TMPDIR`.
 pub fn results_file(version: u32) -> String {
-    format!("dxo-imported-files-PureRawv{version}")
+    format!("dxo-imported-files-{}{version}", spelling(version))
 }
 
 /// The empty file PureRAW `version` writes after the results.
 pub fn trigger_file(version: u32) -> String {
-    format!("dxo-trigger-PureRawv{version}")
+    format!("dxo-trigger-{}{version}", spelling(version))
 }
 
 /// How the run ends.
@@ -78,11 +84,23 @@ pub struct Outcome {
 
 /// The output PureRAW writes for `original` with its default preferences.
 pub fn output_of(original: &str) -> Option<String> {
+    output_for(original, 3)
+}
+
+/// The output PureRAW `version` writes for `original`. PureRAW 6 changes `\` and `"` in an output's
+/// name to `_` (the two characters seen so far in PROTOCOL.md; not a full model of its renaming), so
+/// its names can differ from the original's; the results list gives
+/// the real one.
+pub fn output_for(original: &str, version: u32) -> Option<String> {
     let path = Path::new(original);
     let folder = path.parent()?;
     let name = path.file_name()?.to_str()?;
     let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
-    let out = folder.join("DxO").join(format!("{stem}-{ext}_DxO_DeepPRIME.dng"));
+    let mut file = format!("{stem}-{ext}_DxO_DeepPRIME.dng");
+    if version == 6 {
+        file = file.replace(['\\', '"'], "_");
+    }
+    let out = folder.join("DxO").join(file);
     out.to_str().map(str::to_string)
 }
 
@@ -129,7 +147,7 @@ pub fn run_as(args: &[String], tmp: &Path, mode: Mode, version: u32) -> io::Resu
         format!("DxO PureRAW {version}\nEND_OF_COLLECTION_SET_SECTION\n2026-10-24 10:13END_OF_COLLECTION_NAME_SECTION\n")
     };
     for p in &order {
-        let out = output_of(p).ok_or_else(|| io::Error::other(format!("{p}: no output name")))?;
+        let out = output_for(p, version).ok_or_else(|| io::Error::other(format!("{p}: no output name")))?;
         if let Some(dir) = Path::new(&out).parent() {
             fs::create_dir_all(dir)?;
         }
@@ -147,7 +165,7 @@ pub fn run_as(args: &[String], tmp: &Path, mode: Mode, version: u32) -> io::Resu
         list.push_str(&format!("- {p}\n"));
     }
     for (i, p) in processed.iter().enumerate() {
-        let out = output_of(p).ok_or_else(|| io::Error::other(format!("{p}: no output name")))?;
+        let out = output_for(p, version).ok_or_else(|| io::Error::other(format!("{p}: no output name")))?;
         // PureRAW processes a path sent twice twice, under the same "-" line
         let times = usable.iter().filter(|u| **u == *p).count() * if mode == Mode::RepeatOutputs { 2 } else { 1 };
         for _ in 0..times {
@@ -224,6 +242,14 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn pureraw_6_names_its_files_with_a_capital_raw_as_observed() {
+        assert_eq!(results_file(6), "dxo-imported-files-PureRAWv6");
+        assert_eq!(trigger_file(6), "dxo-trigger-PureRAWv6");
+        assert_eq!(results_file(3), "dxo-imported-files-PureRawv3", "the others keep PureRAW 3's spelling");
+        assert_eq!(trigger_file(3), "dxo-trigger-PureRawv3");
+    }
+
     fn photos(dir: &Path, names: &[&str]) -> Vec<String> {
         names
             .iter()
@@ -282,5 +308,11 @@ mod tests {
     #[test]
     fn the_output_name_keeps_the_extension() {
         assert_eq!(output_of("/p/a b/IMG_1.CR3").as_deref(), Some("/p/a b/DxO/IMG_1-CR3_DxO_DeepPRIME.dng"));
+    }
+
+    #[test]
+    fn pureraw_6_changes_quotes_and_backslashes_in_output_names_and_3_does_not() {
+        assert_eq!(output_for("/p/a\\b\"c.CR3", 6).as_deref(), Some("/p/DxO/a_b_c-CR3_DxO_DeepPRIME.dng"));
+        assert_eq!(output_for("/p/a\\b\"c.CR3", 3).as_deref(), Some("/p/DxO/a\\b\"c-CR3_DxO_DeepPRIME.dng"));
     }
 }

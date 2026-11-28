@@ -14,7 +14,7 @@ pub const ADD_TO_ALBUM: &str = "addToAlbum";
 pub const STACK: &str = "stack";
 /// The setting: the PureRAW version to run, [`AUTOMATIC`] or a [`crate::versions::label`].
 pub const VERSION_SETTING: &str = "version";
-/// The version setting's first choice: the newest tested version installed.
+/// The version setting's first choice: the newest version installed.
 pub const AUTOMATIC: &str = "Automatic";
 /// The most characters of an album's name a message shows: the name comes from a file.
 const MAX_NAME: usize = 100;
